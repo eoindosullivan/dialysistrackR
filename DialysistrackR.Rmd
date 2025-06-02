@@ -1,0 +1,627 @@
+---
+title: "dialysistrackR"
+output:
+  pdf_document:
+    latex_engine: xelatex
+  html_document: default
+date: "2025-06-02"
+---
+
+
+
+## Introduction
+
+This report was generated using a collaborative R Markdown workflow designed to support transparent, reproducible analysis across sites. The project is maintained in a shared GitHub repository, with version tracking, package management, and rendering controlled programmatically to ensure consistency across contributors and outputs. 
+
+The content that follows represents the current state of shared analysis, with outputs suitable for team review, audit and integration into clinical workflows.
+
+```{r dataload, include=FALSE, warning=FALSE, message=FALSE}
+## Dependencies ---- 
+# TinyTeX (Latex renderer)
+
+### Data cleaning ----
+
+# There may be changes to data format as Nick refines his workflow, but some of the principles will remain the same and this data cleaning section we can update until the pipeline stabilises
+
+library(readr)
+library(tidyverse)
+
+#read in data ----
+coreData <- read_csv("DUMMY_DAT.csv", na = c("", " ", "NA")) ## nice use of readr btw
+
+# Time data
+library(lubridate)
+
+coreData <- coreData %>%
+  mutate(
+    Collected = dmy_hm(Collected),         # Parse as date-time (day-month-year hour:minute)
+    CollectedDate = as.Date(Collected)     # Keep just the date part - we can use this bit for graphs later.
+  )
+
+## create a few more dates so we can practice graphing over time.
+
+library(dplyr)
+library(lubridate)
+library(stringr)
+
+set.seed(42)
+
+# Get existing UR numbers
+existing_urs <- unique(coreData$`Ur Number`)
+
+# Define variable ranges 
+range_hgb   <- range(coreData$HGB, na.rm = TRUE)
+range_trf   <- range(coreData$TRFSAT, na.rm = TRUE)
+range_k     <- range(coreData$K, na.rm = TRUE)
+range_pthr  <- range(coreData$PTHR, na.rm = TRUE)
+range_phos  <- range(coreData$PHOS, na.rm = TRUE)
+range_cal   <- range(coreData$CAL, na.rm = TRUE)
+range_alb   <- range(coreData$ALB, na.rm = TRUE)
+hbsab_vals  <- unique(coreData$HBSAB)
+
+# Create synthetic data spaced 4 months apart
+generate_longitudinal <- function(ur_number, start_date = as.Date("2023-01-01")) {
+  tibble(
+    `Ur Number` = ur_number,
+    Collected = format(
+      start_date + months(seq(0, by = 4, length.out = 5)) + days(sample(0:5, 5, replace = TRUE)) + hours(sample(6:16, 5, replace = TRUE)),
+      format = "%d/%m/%Y %H:%M"
+    ),
+    HGB    = sample(seq(range_hgb[1], range_hgb[2]), 5, replace = TRUE),
+    TRFSAT = sample(seq(range_trf[1], range_trf[2]), 5, replace = TRUE),
+    K      = sample(seq(range_k[1], range_k[2]), 5, replace = TRUE),
+    PTHR   = sample(seq(range_pthr[1], range_pthr[2]), 5, replace = TRUE),
+    PHOS   = sample(seq(range_phos[1], range_phos[2]), 5, replace = TRUE),
+    CAL    = sample(seq(range_cal[1], range_cal[2]), 5, replace = TRUE),
+    ALB    = sample(seq(range_alb[1], range_alb[2]), 5, replace = TRUE),
+    HBSAB  = sample(hbsab_vals, 5, replace = TRUE)
+  )
+}
+
+# Generate and bind all
+longitudinal_data <- bind_rows(lapply(existing_urs, generate_longitudinal))
+
+# Convert the 'Collected' column in longitudinal_data to datetime (otherwise throws errors when binding rows)
+longitudinal_data <- longitudinal_data %>%
+  mutate(Collected = dmy_hm(Collected))
+
+
+# Combine with OG data
+coreData <- bind_rows(coreData, longitudinal_data)
+
+##lazy
+ptSubset<-coreData ## can clean this later - I just couldnt be bothered cleaning up the object names below
+
+```
+
+
+## Haemoglobin
+
+```{r hgb_loess_plus_sd, echo=FALSE, warning=FALSE, message=FALSE}
+
+# Step 1: Create a WeekStart column (floored to Monday)
+coreData <- coreData %>%
+  mutate(WeekStart = lubridate::floor_date(CollectedDate, unit = "week", week_start = 1))
+
+# Step 2: Calculate weekly median HGB
+weekly_summary <- coreData %>%
+  group_by(WeekStart) %>%
+  summarise(
+    median_HGB = median(HGB, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+scatterplotTheme <- theme_minimal() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.title.y = element_text(angle = 90, vjust = 0.5),  # <-- vertical
+    axis.title.x = element_text(vjust = -1)
+  )
+
+
+# Step 3: Plot with LOESS and weekly median
+ggplot(coreData, aes(x = CollectedDate, y = HGB)) +
+  geom_point(alpha = 0.25, size = 1.5, color = "grey40") +
+  geom_smooth(method = "loess", span = 0.25, se = TRUE,
+              color = "firebrick", fill = "firebrick", alpha = 0.2) +
+  geom_line(data = weekly_summary,
+            aes(x = WeekStart, y = median_HGB),
+            inherit.aes = FALSE, color = "steelblue", linewidth = 1.2) +
+  geom_point(data = weekly_summary,
+             aes(x = WeekStart, y = median_HGB),
+             inherit.aes = FALSE, color = "steelblue", size = 2) +
+  geom_hline(yintercept = c(80, 120), color = "red", linetype = "dashed") +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y") +
+  labs(
+    title = "Haemoglobin Levels Over Time",
+    subtitle = "",
+    x = "Date", y = "Haemoglobin (g/L)"
+  ) +
+  scatterplotTheme
+
+```
+
+## Interpretation
+
+This plot visualises haemoglobin (HGB) levels across the unit over time. Unit-level trends can help identify systemic issues affecting multiple patients — such as inconsistent access to erythropoiesis-stimulating agents (ESAs), delays in blood draws, or problems with iron management.
+
+-   Raw data (grey dots): Each point represents a single HGB result from an individual patient on a specific date, imported directly from AUSLAB.
+
+-   Red line (LOESS curve): A smoothed estimate of the trend in HGB values over time. LOESS (Locally Estimated Scatterplot Smoothing) is a nonparametric method that fits multiple small, local regressions to the data. It’s particularly useful for visualising subtle shifts and inflection points without assuming a linear or fixed relationship.
+
+-   Pale red area (confidence interval): A 95% confidence interval around the LOESS curve. It gives a visual indication of uncertainty in the smoothed trend — wider areas imply more variability or fewer observations at that timepoint.
+
+-   Blue line (weekly median): The weekly median HGB, calculated across all patients tested in that week. It provides a robust, point-in-time summary less sensitive to extreme values than the mean.
+
+-   Red dashed lines: The Kidney Health Service’s target haemoglobin range (80–120 g/L). Values falling persistently outside this band may indicate a need for clinical review at the unit or system level.
+
+## Haemoglobin Results by Target Range
+
+```{r hgb_analysis, echo=FALSE, warning=FALSE, message=FALSE}
+library(dplyr)
+library(lubridate)
+library(knitr)
+library(kableExtra)
+
+
+# Define HGB targets
+lower_limit <- 80
+upper_limit <- 120
+
+# Filter to most recent result per patient
+latest_hgb <- coreData %>%
+  filter(!is.na(HGB)) %>%
+  arrange(`Ur Number`, desc(CollectedDate)) %>%
+  group_by(`Ur Number`) %>%
+  slice_head(n = 1) %>%
+  ungroup()
+
+# Categorise based on target range
+total_patients <- n_distinct(latest_hgb$`Ur Number`)
+
+hgb_stats <- latest_hgb %>%
+  mutate(HGB_category = case_when(
+    HGB < lower_limit ~ "Below Target",
+    HGB > upper_limit ~ "Above Target",
+    TRUE ~ "Within Target"
+  )) %>%
+  group_by(HGB_category) %>%
+  summarise(
+    n_patients = n(),
+    prop_patients = round(100 * n_patients / total_patients, 1),
+    .groups = "drop"
+  )
+
+
+# Print clean summary
+hgb_stats %>%
+  mutate(
+    line = sprintf(
+      "%-15s | %3d patients | %5.1f%%",
+      HGB_category, n_patients, prop_patients
+    )
+  ) %>%
+  pull(line) %>%
+  cat(sep = "\n")
+
+
+
+coreData <- coreData %>%
+  mutate(CollectedDate = as.Date(Collected))
+# Define HGB flags: drop below target and acute drop
+coreData <- coreData %>%
+  arrange(`Ur Number`, CollectedDate) %>%
+  group_by(`Ur Number`) %>%
+  mutate(
+    prev_HGB = lag(HGB),
+    prev_date = lag(CollectedDate),
+    delta_HGB = HGB - prev_HGB,
+    delta_days = as.numeric(CollectedDate - prev_date)
+  ) %>%
+  ungroup()
+
+# 1. Drop from ≥80 to <80
+drop_below_target <- coreData %>%
+  filter(!is.na(HGB) & !is.na(prev_HGB) & prev_HGB >= 80 & HGB < 80) %>%
+  mutate(Event = "Drop from ≥80 to <80 g/L")
+
+# 2. Drop ≥10 g/L in ≤30 days
+drop_10_in_1_month <- coreData %>%
+  filter(!is.na(delta_HGB) & delta_HGB <= -10 & delta_days <= 30) %>%
+  mutate(Event = "Drop ≥10 g/L in ≤30 days")
+
+# Combine and take most recent event per patient
+hb_flagged_events <- bind_rows(drop_below_target, drop_10_in_1_month) %>%
+  arrange(`Ur Number`, desc(CollectedDate)) %>%
+  group_by(`Ur Number`) %>%
+  slice_head(n = 1) %>%
+  ungroup() %>%
+  filter(CollectedDate >= Sys.Date() - 30) %>%   # was just getting too many hits with the synthetic stuff
+  select(`Ur Number`, CollectedDate, HGB, prev_HGB, delta_HGB, delta_days, Event)
+
+# Recalculate summary counts
+n_drop_below_target <- hb_flagged_events %>%
+  filter(Event == "Drop from ≥80 to <80 g/L") %>%
+  n_distinct("Ur Number")
+
+n_drop_10_in_1_month <- hb_flagged_events %>%
+  filter(Event == "Drop ≥10 g/L in ≤30 days") %>%
+  n_distinct("Ur Number")
+
+# Output summary
+cat("Patients who dropped from ≥80 to <80 g/L within 30 days: ", n_drop_below_target, "\n")
+cat("Patients with ≥10 g/L HGB drop within 30 days: ", n_drop_10_in_1_month, "\n")
+
+# Output final table
+hb_flagged_events %>%
+  arrange(`Ur Number`, CollectedDate) %>%
+  kable(caption = "Most Recent Flagged Haemoglobin Event per Patientm within 30 days", digits = 1) %>%
+  kable_styling(full_width = FALSE)
+
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.width = 6, fig.height = 4)
+
+
+#tinytex::install_tinytex() #LaTeX renderer required to generate PDFs
+
+library(ggplot2)
+ptURN <- "RB111111"
+# Allow for reports for 
+# - single pts
+# - list of single pts (e.g. show time-series for pts URN a, b, c, d ?all in one file vs ?separate files)
+# - aggregated pts (e.g. show / summarise pt results + URNS when Hb < 70)
+
+#coreData <- read.csv("DUMMY_DAT.csv", na.strings=c(""," ","NA")) ## prepped earlier so muted this
+
+# Every time this script is run, a "random pt" set will be generated - pt datasets will be variable ## EOS: why this approach and not just all ?
+#randomData <- coreData; randomData[sample(nrow(randomData), 70), 'Ur.Number'] <- ptURN
+#ptSubset <- subset(randomData, Ur.Number == ptURN)
+# ,"<  10", ">1000" 
+# 
+
+coreData$HBSAB[coreData$HBSAB == "<  10"] <- "<10"
+coreData$HBSAB[coreData$HBSAB >10] <- "10-1000"
+coreData$HBSAB[coreData$HBSAB == ">1000"] <- ">1000"
+coreData$HBSAB <- factor(coreData$HBSAB, levels=c("<10", "10-1000", ">1000"))
+
+coreData$Collected <- as.POSIXct(coreData$Collected, format="%d/%m/%Y %H:%M")
+
+scatterplotTheme <- theme_minimal() +
+  theme(panel.grid.major = element_blank(),
+  panel.grid.minor = element_blank(),
+  axis.title.y = element_text(angle = 0, vjust = 0.5),
+  axis.title.x = element_text(vjust = -1)
+  )
+
+```
+
+```{r globals, warning=FALSE, echo=FALSE}
+
+#summary(coreData)
+
+thresholds <- data.frame( 
+     hgb = c(80,115),
+  trfsat = c(20,50),
+       k = c(3.0,5.5),
+    pthr = c(18,90),
+    phos = c(1.5,4),
+      ca = c(2.00, 2.60),
+     alb = c(20,40)
+   #hbsab = c("<10", ">1000")
+); names(thresholds) <- names(coreData[seq(3, length(thresholds)+(3-1))])
+
+returnExtremes <- function(dataset, thresholdDF) {
+  
+  for (variable in names(thresholdDF)) {
+    low <- length(
+        subset(dataset, 
+               dataset[,variable] <= thresholdDF[[variable]][1]
+               )[,1] 
+            )
+        
+    high <- length(
+        subset(dataset, 
+               dataset[,variable] >= thresholdDF[[variable]][2]
+               )[,1] 
+            )
+    cat(paste0(variable, "\n",
+                 "no. of pts >= ", thresholdDF[[variable]][1],": ", low, "\n",
+                 "no. of pts <= ", thresholdDF[[variable]][2],": ", high, "\n"))
+      }
+      
+}
+
+# TODO: ?Vectorise returnExtremes function
+
+```
+
+# Summary
+
+Total patients: `r length(coreData$Ur.Number)`
+
+```{r extremes, warning = FALSE, echo = FALSE}
+returnExtremes(coreData, thresholds)
+```
+
+# Haemaglobin
+
+```{r hgb, echo=FALSE, error=FALSE, message=FALSE, warning=FALSE}
+# Subset by pt 
+# 
+
+#as.Date(Collected)
+# as.Date nested in as.POSIXct to support time format in future if needed
+## as.Date(as.POSIXct(Collected, format="%d/%m/%Y %H:%M"))
+# 
+# HB data ranges 80-120
+# 
+
+# TODO: better axis labels / formats
+# TODO: rolling mean from Zoo library (rollmean for average over-time)
+# TODO: fix axis ticks 
+
+ggplot(data= coreData, 
+       aes(x=as.Date(Collected, format="%d/%m/%Y %H:%M"), y=HGB, group=1)) +
+  geom_point() +
+  geom_hline(yintercept = 80, color = "red") + 
+  geom_hline(yintercept = 120, color = "red") +
+  scale_x_date(date_breaks = "1 month", date_labels =  "%b %Y") +
+  geom_smooth(method=stats::loess, se=F, 
+                      method.args=list(degree=0,span=1)) +
+  xlab("Sample Collection Date (Month Year)") +
+  ggtitle("Haemoglobin Levels - Normal Range 80-120") +
+  scale_y_continuous(limits = c(30,180), breaks = seq(20,180,20)) +
+  scatterplotTheme
+
+
+#HbLow <- subset(coreData, HGB <= 80)
+#summary(HbLow) #target specific values. E.g. what is average phosphate with low Hb?
+#HbHigh <- subset(coreData, HGB >= 120)
+#summary(HbHigh)
+
+# ?flat roll-mean because random generated data?
+# 
+# 
+
+cat("\n\n\n")
+
+ggplot(data= ptSubset, 
+       aes(x=as.Date(Collected, format="%d/%m/%Y %H:%M"), y=HGB, group=1)) +
+  geom_point() +
+  geom_hline(yintercept = 80, color = "red") + 
+  geom_hline(yintercept = 120, color = "red") +
+  scale_x_date(date_breaks = "1 month", date_labels =  "%b %Y") +
+  geom_smooth(method=stats::loess, se=F, 
+                      method.args=list(degree=0,span=1)) +
+  xlab("Sample Collection Date (Month Year)") +
+  ggtitle(paste0("Haemoglobin Levels for patient: ", ptURN)) +
+  scale_y_continuous(limits = c(30,180), breaks = seq(20,180,20)) +
+  scatterplotTheme
+
+```
+
+# Transferrin Saturation
+
+```{r TRFSAT, echo = FALSE, error = FALSE, message=FALSE, warning=FALSE}
+ggplot(data= coreData, 
+       aes(x=as.Date(Collected, format="%d/%m/%Y %H:%M"), y=TRFSAT, group=1)) +
+  geom_point() +
+  ylim(-2, 60) +
+  geom_hline(yintercept = 20, color = "red") + 
+  geom_hline(yintercept = 50, color = "red") +
+  scale_x_date(date_breaks = "1 month", date_labels =  "%b %Y") +
+  geom_smooth(method=stats::loess, se=F, 
+                      method.args=list(degree=0,span=5)) +
+  xlab("Sample Collection Date (Month Year)") +
+  ggtitle("Transferrin Sats - Normal Range 20-50%") +
+  scale_y_continuous(limits = c(-2,60), breaks = seq(0,60,10)) +
+  scatterplotTheme
+
+# Pt Subset
+ggplot(data= ptSubset, 
+       aes(x=as.Date(Collected, format="%d/%m/%Y %H:%M"), y=TRFSAT, group=1)) +
+  geom_point() +
+  ylim(-2, 60) +
+  geom_hline(yintercept = 20, color = "red") + 
+  geom_hline(yintercept = 50, color = "red") +
+  scale_x_date(date_breaks = "1 month", date_labels =  "%b %Y") +
+  geom_smooth(method=stats::loess, se=F, 
+                      method.args=list(degree=0,span=1)) +
+  xlab("Sample Collection Date (Month Year)") +
+  ggtitle(paste0("Transferrin Sats for patient: ", ptURN)) +
+  scale_y_continuous(limits = c(-2,60), breaks = seq(0,60,10)) +
+  scatterplotTheme
+
+
+```
+
+# Serum Potassium
+
+```{r K, echo = FALSE, error = FALSE, message=FALSE, warning=FALSE}
+ggplot(data= coreData, 
+       aes(x=as.Date(Collected, format="%d/%m/%Y %H:%M"), y=K, group=1)) +
+  geom_point() +
+  ylim(-2, 60) +
+  geom_hline(yintercept = 3.5, color = "red") + 
+  geom_hline(yintercept = 5.5, color = "red") +
+  scale_x_date(date_breaks = "1 month", date_labels =  "%b %Y") +
+  geom_smooth(method=stats::loess, se=F, 
+                      method.args=list(degree=0,span=10)) +
+  xlab("Sample Collection Date (Month Year)") +
+  ggtitle("Serum Potassium - Normal Range 3.5-5.5") +
+  scale_y_continuous(limits = c(0,8), breaks = seq(0,10,1)) +
+  scatterplotTheme
+
+ggplot(data= ptSubset, 
+       aes(x=as.Date(Collected, format="%d/%m/%Y %H:%M"), y=K, group=1)) +
+  geom_point() +
+  ylim(-2, 60) +
+  geom_hline(yintercept = 3.5, color = "red") + 
+  geom_hline(yintercept = 5.5, color = "red") +
+  scale_x_date(date_breaks = "1 month", date_labels =  "%b %Y") +
+  geom_smooth(method=stats::loess, se=F, 
+                      method.args=list(degree=0,span=1)) +
+  xlab("Sample Collection Date (Month Year)") +
+  ggtitle(paste0("Serum Potassium for patient: ", ptURN)) +
+  scale_y_continuous(limits = c(0,8), breaks = seq(0,10,1)) +
+  scatterplotTheme
+
+```
+
+# Serum Parathyroid Hormone
+
+```{r PTHR, echo = FALSE, error = FALSE, message=FALSE, warning=FALSE}
+ggplot(data= coreData, 
+       aes(x=as.Date(Collected, format="%d/%m/%Y %H:%M"), y=PTHR, group=1)) +
+  geom_point() +
+  ylim(-2, 60) +
+  geom_hline(yintercept = 15, color = "red") + 
+  geom_hline(yintercept = 65, color = "red") +
+  scale_x_date(date_breaks = "1 month", date_labels =  "%b %Y") +
+  geom_smooth(method=stats::loess, se=F, 
+                      method.args=list(degree=0,span=10)) +
+  xlab("Sample Collection Date (Month Year)") +
+  ggtitle("Serum Parathyroid Hormone - Normal Range ?15-65") +
+  scale_y_continuous(limits = c(0,180), breaks = seq(0,180,20)) +
+  scatterplotTheme
+
+# Pt Dataset 
+
+ggplot(data= ptSubset, 
+       aes(x=as.Date(Collected, format="%d/%m/%Y %H:%M"), y=PTHR, group=1)) +
+  geom_point() +
+  ylim(-2, 60) +
+  geom_hline(yintercept = 15, color = "red") + 
+  geom_hline(yintercept = 65, color = "red") +
+  scale_x_date(date_breaks = "1 month", date_labels =  "%b %Y") +
+  geom_smooth(method=stats::loess, se=F, 
+                      method.args=list(degree=0,span=1)) +
+  xlab("Sample Collection Date (Month Year)") +
+  ggtitle(paste0("Serum Parathyroid Hormone for patient: ", ptURN)) +
+  scale_y_continuous(limits = c(0,180), breaks = seq(0,180,20)) +
+  scatterplotTheme
+
+```
+
+# Serum Phosphate
+
+```{r PHOS, echo = FALSE, error = FALSE, message=FALSE, warning=FALSE}
+ggplot(data= coreData, 
+       aes(x=as.Date(Collected, format="%d/%m/%Y %H:%M"), y=PHOS, group=1)) +
+  geom_point() +
+  ylim(-2, 60) +
+  geom_hline(yintercept = 2, color = "red") + 
+  geom_hline(yintercept = 4, color = "red") +
+  scale_x_date(date_breaks = "1 month", date_labels =  "%b %Y") +
+  geom_smooth(method=stats::loess, se=F, 
+                      method.args=list(degree=0,span=10)) +
+  xlab("Sample Collection Date (Month Year)") +
+  ggtitle("Serum Phosphate Levels - Normal Range 2-4") +
+  scale_y_continuous(limits = c(1,5), breaks = seq(0,5,0.5)) +
+  scatterplotTheme
+
+ggplot(data= ptSubset, 
+       aes(x=as.Date(Collected, format="%d/%m/%Y %H:%M"), y=PHOS, group=1)) +
+  geom_point() +
+  ylim(-2, 60) +
+  geom_hline(yintercept = 2, color = "red") + 
+  geom_hline(yintercept = 4, color = "red") +
+  scale_x_date(date_breaks = "1 month", date_labels =  "%b %Y") +
+  geom_smooth(method=stats::loess, se=F, 
+                      method.args=list(degree=0,span=1)) +
+  xlab("Sample Collection Date (Month Year)") +
+  ggtitle(paste0("Serum Phosphate Levels for patient: ", ptURN)) +
+  scale_y_continuous(limits = c(1,5), breaks = seq(0,5,0.5)) +
+  scatterplotTheme
+
+```
+
+# Serum Calcium
+
+```{r CAL, echo = FALSE, error = FALSE, message=FALSE, warning=FALSE}
+ggplot(data= coreData, 
+       aes(x=as.Date(Collected, format="%d/%m/%Y %H:%M"), y=CAL, group=1)) +
+  geom_point() +
+  ylim(-2, 60) +
+  geom_hline(yintercept = 2.10, color = "red") + 
+  geom_hline(yintercept = 2.60, color = "red") +
+  scale_x_date(date_breaks = "1 month", date_labels =  "%b %Y") +
+  geom_smooth(method=stats::loess, se=F, 
+                      method.args=list(degree=0,span=10)) +
+  xlab("Sample Collection Date (Month Year)") +
+  ggtitle("Serum Calcium Levels - Normal Range 2.10-2.60") +
+  scale_y_continuous(limits = c(1,3), breaks = seq(0,3,0.5)) +
+  scatterplotTheme
+
+ggplot(data= ptSubset, 
+       aes(x=as.Date(Collected, format="%d/%m/%Y %H:%M"), y=CAL, group=1)) +
+  geom_point() +
+  ylim(-2, 60) +
+  geom_hline(yintercept = 2.10, color = "red") + 
+  geom_hline(yintercept = 2.60, color = "red") +
+  scale_x_date(date_breaks = "1 month", date_labels =  "%b %Y") +
+  geom_smooth(method=stats::loess, se=F, 
+                      method.args=list(degree=0,span=1)) +
+  xlab("Sample Collection Date (Month Year)") +
+  ggtitle(" - Normal Range ") +
+  ggtitle(paste0("Serum Calcium Levels for patient: ", ptURN)) +
+  scale_y_continuous(limits = c(1,3), breaks = seq(0,3,0.5)) +
+  scatterplotTheme
+
+```
+
+# Serum Albumin
+
+```{r ALB, echo = FALSE, error = FALSE, message=FALSE, warning=FALSE}
+ggplot(data= coreData, 
+       aes(x=as.Date(Collected, format="%d/%m/%Y %H:%M"), y=ALB, group=1)) +
+  geom_point() +
+  ylim(-2, 60) +
+  geom_hline(yintercept = 19, color = "red") + 
+  geom_hline(yintercept = 26, color = "red") +
+  scale_x_date(date_breaks = "1 month", date_labels =  "%b %Y") +
+  geom_smooth(method=stats::loess, se=F, 
+                      method.args=list(degree=0,span=10)) +
+  xlab("Sample Collection Date (Month Year)") +
+  ggtitle("Serum Albumin Levels - Normal Range 19-26") +
+  scale_y_continuous(limits = c(10,35), breaks = seq(0,35,5)) +
+  scatterplotTheme
+
+ggplot(data= ptSubset, 
+       aes(x=as.Date(Collected, format="%d/%m/%Y %H:%M"), y=ALB, group=1)) +
+  geom_point() +
+  ylim(-2, 60) +
+  geom_hline(yintercept = 19, color = "red") + 
+  geom_hline(yintercept = 26, color = "red") +
+  scale_x_date(date_breaks = "1 month", date_labels =  "%b %Y") +
+  geom_smooth(method=stats::loess, se=F, 
+                      method.args=list(degree=0,span=1)) +
+  xlab("Sample Collection Date (Month Year)") +
+  ggtitle(paste0("Serum Albumin Levels for patient: ", ptURN)) +
+  scale_y_continuous(limits = c(10,35), breaks = seq(0,35,5)) +
+  scatterplotTheme
+
+```
+
+# Hepatitis B Serum Antibodies
+
+```{r HBSAB, echo = FALSE, error = FALSE, message=FALSE, warning=FALSE}
+# TODO: Handle <10 and > 1000 values
+ggplot(data=na.omit(coreData), 
+       aes(x=as.Date(Collected, format="%d/%m/%Y %H:%M"), y=HBSAB, group=1)) +
+  geom_point() +
+  #ylim(-2, 60) +
+#  geom_hline(yintercept = 19, color = "red") + 
+ # geom_hline(yintercept = 26, color = "red") +
+  scale_x_date(date_breaks = "1 month", date_labels =  "%b %Y") +
+ # geom_smooth(method=stats::loess, se=F, 
+  #                    method.args=list(degree=0,span=10)) +
+  xlab("Sample Collection Date (Month Year)") +
+  ggtitle("Serum HBSAB Levels - Normal >10") +
+  scatterplotTheme
+  #scale_y_continuous(limits = c(10,35), breaks = seq(0,35,5))
+
+```
