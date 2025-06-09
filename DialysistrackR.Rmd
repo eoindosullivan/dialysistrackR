@@ -19,12 +19,17 @@ The content that follows represents the current state of shared analysis, with o
 ## Dependencies ---- 
 # TinyTeX (Latex renderer)
 
+
+### Global Vars
+ptURN <- "RB111111"
+
 ### Data cleaning ----
 
 # There may be changes to data format as Nick refines his workflow, but some of the principles will remain the same and this data cleaning section we can update until the pipeline stabilises
 
 library(readr)
 library(tidyverse)
+library(tinytex)
 
 #read in data ----
 coreData <- read_csv("DUMMY_DAT.csv", na = c("", " ", "NA")) ## nice use of readr btw
@@ -41,10 +46,12 @@ coreData <- coreData %>%
 ## create a few more dates so we can practice graphing over time.
 
 library(dplyr)
-library(lubridate)
 library(stringr)
 
-set.seed(42)
+library(knitr)
+library(kableExtra)
+
+set.seed(42) #Ultimate Question of Life, the Universe, and Everything
 
 # Get existing UR numbers
 existing_urs <- unique(coreData$`Ur Number`)
@@ -64,7 +71,10 @@ generate_longitudinal <- function(ur_number, start_date = as.Date("2023-01-01"))
   tibble(
     `Ur Number` = ur_number,
     Collected = format(
-      start_date + months(seq(0, by = 4, length.out = 5)) + days(sample(0:5, 5, replace = TRUE)) + hours(sample(6:16, 5, replace = TRUE)),
+      start_date + 
+        months(seq(0, by = 4, length.out = 5)) + 
+        days(sample(0:5, 5, replace = TRUE)) + 
+        hours(sample(6:16, 5, replace = TRUE)),
       format = "%d/%m/%Y %H:%M"
     ),
     HGB    = sample(seq(range_hgb[1], range_hgb[2]), 5, replace = TRUE),
@@ -90,10 +100,9 @@ longitudinal_data <- longitudinal_data %>%
 coreData <- bind_rows(coreData, longitudinal_data)
 
 ##lazy
-ptSubset<-coreData ## can clean this later - I just couldnt be bothered cleaning up the object names below
+ ptSubset<-coreData %>% filter(`Ur Number` == ptURN)## can clean this later - I just couldnt be bothered cleaning up the object names below
 
 ```
-
 
 ## Haemoglobin
 
@@ -108,6 +117,13 @@ weekly_summary <- coreData %>%
   group_by(WeekStart) %>%
   summarise(
     median_HGB = median(HGB, na.rm = TRUE),
+#    median_delta_HGB = median(delta_HGB, na.rm = TRUE),
+    median_TRFSAT = median(TRFSAT, na.rm = TRUE),
+    median_K = median(K, na.rm = TRUE),
+    median_PTHR = median(PTHR, na.rm = TRUE),
+    median_PHOS = median(PHOS, na.rm = TRUE),
+    median_CAL = median(CAL, na.rm = TRUE),
+    median_ALB = median(ALB, na.rm = TRUE),
     .groups = "drop"
   )
 
@@ -118,17 +134,25 @@ scatterplotTheme <- theme_minimal() +
     axis.title.y = element_text(angle = 90, vjust = 0.5),  # <-- vertical
     axis.title.x = element_text(vjust = -1)
   )
-
+# Take data in specific window
+dateWindow <- c("2025-01-01", "2025-12-12")
 
 # Step 3: Plot with LOESS and weekly median
-ggplot(coreData, aes(x = CollectedDate, y = HGB)) +
+ggplot(coreData %>% filter( #keep dates within range of dateWindow dates
+  CollectedDate>dateWindow[1], 
+  CollectedDate <dateWindow[2]), 
+  aes(x = CollectedDate, y = HGB)) +
   geom_point(alpha = 0.25, size = 1.5, color = "grey40") +
   geom_smooth(method = "loess", span = 0.25, se = TRUE,
               color = "firebrick", fill = "firebrick", alpha = 0.2) +
-  geom_line(data = weekly_summary,
+  geom_line(data = weekly_summary %>% filter( #keep dates within range of dateWindow dates
+  WeekStart > dateWindow[1], 
+  WeekStart < dateWindow[2]), 
             aes(x = WeekStart, y = median_HGB),
             inherit.aes = FALSE, color = "steelblue", linewidth = 1.2) +
-  geom_point(data = weekly_summary,
+  geom_point(data = weekly_summary %>% filter( #keep dates within range of dateWindow dates
+  WeekStart > dateWindow[1], 
+  WeekStart < dateWindow[2]),
              aes(x = WeekStart, y = median_HGB),
              inherit.aes = FALSE, color = "steelblue", size = 2) +
   geom_hline(yintercept = c(80, 120), color = "red", linetype = "dashed") +
@@ -159,10 +183,6 @@ This plot visualises haemoglobin (HGB) levels across the unit over time. Unit-le
 ## Haemoglobin Results by Target Range
 
 ```{r hgb_analysis, echo=FALSE, warning=FALSE, message=FALSE}
-library(dplyr)
-library(lubridate)
-library(knitr)
-library(kableExtra)
 
 
 # Define HGB targets
@@ -193,7 +213,6 @@ hgb_stats <- latest_hgb %>%
     .groups = "drop"
   )
 
-
 # Print clean summary
 hgb_stats %>%
   mutate(
@@ -204,8 +223,6 @@ hgb_stats %>%
   ) %>%
   pull(line) %>%
   cat(sep = "\n")
-
-
 
 coreData <- coreData %>%
   mutate(CollectedDate = as.Date(Collected))
@@ -268,7 +285,8 @@ knitr::opts_chunk$set(echo = TRUE, fig.width = 6, fig.height = 4)
 #tinytex::install_tinytex() #LaTeX renderer required to generate PDFs
 
 library(ggplot2)
-ptURN <- "RB111111"
+
+ptSubset<-coreData %>% filter(`Ur Number` == ptURN)
 # Allow for reports for 
 # - single pts
 # - list of single pts (e.g. show time-series for pts URN a, b, c, d ?all in one file vs ?separate files)
@@ -289,12 +307,12 @@ coreData$HBSAB <- factor(coreData$HBSAB, levels=c("<10", "10-1000", ">1000"))
 
 coreData$Collected <- as.POSIXct(coreData$Collected, format="%d/%m/%Y %H:%M")
 
-scatterplotTheme <- theme_minimal() +
-  theme(panel.grid.major = element_blank(),
-  panel.grid.minor = element_blank(),
-  axis.title.y = element_text(angle = 0, vjust = 0.5),
-  axis.title.x = element_text(vjust = -1)
-  )
+#scatterplotTheme <- theme_minimal() +
+#  theme(panel.grid.major = element_blank(),
+#  panel.grid.minor = element_blank(),
+#  axis.title.y = element_text(angle = 0, vjust = 0.5),
+#  axis.title.x = element_text(vjust = -1)
+#  )
 
 ```
 
@@ -340,7 +358,6 @@ returnExtremes <- function(dataset, thresholdDF) {
 
 # Summary
 
-Total patients: `r length(coreData$Ur.Number)`
 
 ```{r extremes, warning = FALSE, echo = FALSE}
 returnExtremes(coreData, thresholds)
@@ -363,19 +380,31 @@ returnExtremes(coreData, thresholds)
 # TODO: rolling mean from Zoo library (rollmean for average over-time)
 # TODO: fix axis ticks 
 
-ggplot(data= coreData, 
-       aes(x=as.Date(Collected, format="%d/%m/%Y %H:%M"), y=HGB, group=1)) +
-  geom_point() +
-  geom_hline(yintercept = 80, color = "red") + 
-  geom_hline(yintercept = 120, color = "red") +
-  scale_x_date(date_breaks = "1 month", date_labels =  "%b %Y") +
-  geom_smooth(method=stats::loess, se=F, 
-                      method.args=list(degree=0,span=1)) +
-  xlab("Sample Collection Date (Month Year)") +
-  ggtitle("Haemoglobin Levels - Normal Range 80-120") +
-  scale_y_continuous(limits = c(30,180), breaks = seq(20,180,20)) +
+ggplot(coreData %>% filter( #keep dates within range of dateWindow dates
+  CollectedDate>dateWindow[1], 
+  CollectedDate <dateWindow[2]), 
+  aes(x = CollectedDate, y = HGB)) +
+  geom_point(alpha = 0.25, size = 1.5, color = "grey40") +
+  geom_smooth(method = "loess", span = 0.25, se = TRUE,
+              color = "firebrick", fill = "firebrick", alpha = 0.2) +
+  geom_line(data = weekly_summary %>% filter( #keep dates within range of dateWindow dates
+            WeekStart > dateWindow[1], 
+            WeekStart < dateWindow[2]), 
+            aes(x = WeekStart, y = median_HGB),
+            inherit.aes = FALSE, color = "steelblue", linewidth = 1.2) +
+  geom_point(data = weekly_summary %>% filter( #keep dates within range of dateWindow dates
+              WeekStart > dateWindow[1], 
+              WeekStart < dateWindow[2]),
+              aes(x = WeekStart, y = median_HGB),
+              inherit.aes = FALSE, color = "steelblue", size = 2) +
+  geom_hline(yintercept = c(80, 120), color = "red", linetype = "dashed") +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y") +
+  labs(
+    title = "Haemoglobin Levels Over Time",
+    subtitle = "",
+    x = "Date", y = "Haemoglobin (g/L)"
+  ) +
   scatterplotTheme
-
 
 #HbLow <- subset(coreData, HGB <= 80)
 #summary(HbLow) #target specific values. E.g. what is average phosphate with low Hb?
@@ -387,53 +416,110 @@ ggplot(data= coreData,
 # 
 
 cat("\n\n\n")
+#
+#ggplot(data= ptSubset, 
+#       aes(x=as.Date(Collected, format="%d/%m/%Y %H:%M"), y=HGB, group=1)) +
+#  geom_point() +
+#  geom_hline(yintercept = 80, color = "red") + 
+#  geom_hline(yintercept = 120, color = "red") +
+#  scale_x_date(date_breaks = "6 months", date_labels =  "%b %Y") +
+#  geom_smooth(method=stats::loess, se=F, 
+#                      method.args=list(degree=0,span=1)) +
+#  xlab("Sample Collection Date (Month Year)") +
+#  ggtitle(paste0("Haemoglobin Levels for patient: ", ptURN)) +
+#  scale_y_continuous(limits = c(30,180), breaks = seq(20,180,20)) +
+#  scatterplotTheme
 
-ggplot(data= ptSubset, 
-       aes(x=as.Date(Collected, format="%d/%m/%Y %H:%M"), y=HGB, group=1)) +
-  geom_point() +
-  geom_hline(yintercept = 80, color = "red") + 
-  geom_hline(yintercept = 120, color = "red") +
-  scale_x_date(date_breaks = "1 month", date_labels =  "%b %Y") +
-  geom_smooth(method=stats::loess, se=F, 
-                      method.args=list(degree=0,span=1)) +
-  xlab("Sample Collection Date (Month Year)") +
-  ggtitle(paste0("Haemoglobin Levels for patient: ", ptURN)) +
-  scale_y_continuous(limits = c(30,180), breaks = seq(20,180,20)) +
+# Pt HB PLOT
+ptCollectedDates <- c(as.Date(min(ptSubset$Collected)), as.Date(max(ptSubset$Collected))) #GLOBAL VAR
+ggplot(coreData %>% filter( #keep dates within range of dateWindow dates
+  CollectedDate > ptCollectedDates[1], 
+  CollectedDate < ptCollectedDates[2]), 
+  aes(x = CollectedDate, y = HGB)) +
+  geom_point(alpha = 0.25, size = 1.5, color = "grey65") +
+  geom_smooth(method = "loess", span = 0.25, se = TRUE,
+              color = "firebrick", fill = "firebrick", alpha = 0.1) +
+  geom_line(data =ptSubset %>% filter( #keep dates within range of ptCollectedDates
+            CollectedDate >= ptCollectedDates[1], # can likely expand this to contain multiple pts w/ group_by feature
+            CollectedDate <= ptCollectedDates[2]),
+            aes(x = CollectedDate, y = HGB),
+            inherit.aes = FALSE, color = "darkslateblue", linewidth = 1.2) +
+ # geom_point(data = weekly_summary %>% filter( #keep dates within range of dateWindow dates
+ #             WeekStart > dateWindow[1], 
+ #             WeekStart < dateWindow[2]),
+ #             aes(x = WeekStart, y = median_HGB),
+ #             inherit.aes = FALSE, color = "steelblue", size = 2) +
+  geom_hline(yintercept = c(80, 120), color = "red", linetype = "dashed") +
+  scale_x_date(date_breaks = "3 months", date_labels = "%b %Y") +
+  labs(
+    title = " Individual Pt Hb Saturations Over Time",
+    subtitle = "",
+    x = "Date", y = "Haemoglobin (g/L)"
+  ) +
   scatterplotTheme
+# TODO: ADD table listing pt values below graph
 
 ```
 
 # Transferrin Saturation
 
 ```{r TRFSAT, echo = FALSE, error = FALSE, message=FALSE, warning=FALSE}
-ggplot(data= coreData, 
-       aes(x=as.Date(Collected, format="%d/%m/%Y %H:%M"), y=TRFSAT, group=1)) +
-  geom_point() +
-  ylim(-2, 60) +
-  geom_hline(yintercept = 20, color = "red") + 
-  geom_hline(yintercept = 50, color = "red") +
-  scale_x_date(date_breaks = "1 month", date_labels =  "%b %Y") +
-  geom_smooth(method=stats::loess, se=F, 
-                      method.args=list(degree=0,span=5)) +
-  xlab("Sample Collection Date (Month Year)") +
-  ggtitle("Transferrin Sats - Normal Range 20-50%") +
-  scale_y_continuous(limits = c(-2,60), breaks = seq(0,60,10)) +
+# TRFSATS - overall Data
+ggplot(coreData %>% filter( #keep dates within range of dateWindow dates
+  CollectedDate>dateWindow[1], 
+  CollectedDate <dateWindow[2]), 
+  aes(x = CollectedDate, y = TRFSAT)) +
+  geom_point(alpha = 0.25, size = 1.5, color = "grey40") +
+  geom_smooth(method = "loess", span = 0.25, se = TRUE,
+              color = "firebrick", fill = "firebrick", alpha = 0.2) +
+  geom_line(data = weekly_summary %>% filter( #keep dates within range of dateWindow dates
+            WeekStart > dateWindow[1], 
+            WeekStart < dateWindow[2]), 
+            aes(x = WeekStart, y = median_TRFSAT),
+            inherit.aes = FALSE, color = "steelblue", linewidth = 1.2) +
+  geom_point(data = weekly_summary %>% filter( #keep dates within range of dateWindow dates
+              WeekStart > dateWindow[1], 
+              WeekStart < dateWindow[2]),
+              aes(x = WeekStart, y = median_TRFSAT),
+              inherit.aes = FALSE, color = "steelblue", size = 2) +
+  geom_hline(yintercept = thresholds$TRFSAT, color = "red", linetype = "dashed") +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y") +
+  labs(
+    title = "Haemoglobin Levels Over Time",
+    subtitle = "",
+    x = "Date", y = "Haemoglobin (g/L)"
+  ) +
   scatterplotTheme
 
-# Pt Subset
-ggplot(data= ptSubset, 
-       aes(x=as.Date(Collected, format="%d/%m/%Y %H:%M"), y=TRFSAT, group=1)) +
-  geom_point() +
-  ylim(-2, 60) +
-  geom_hline(yintercept = 20, color = "red") + 
-  geom_hline(yintercept = 50, color = "red") +
-  scale_x_date(date_breaks = "1 month", date_labels =  "%b %Y") +
-  geom_smooth(method=stats::loess, se=F, 
-                      method.args=list(degree=0,span=1)) +
-  xlab("Sample Collection Date (Month Year)") +
-  ggtitle(paste0("Transferrin Sats for patient: ", ptURN)) +
-  scale_y_continuous(limits = c(-2,60), breaks = seq(0,60,10)) +
+
+# TRFSATS - Pt Subset
+ggplot(coreData %>% filter( #keep dates within range of dateWindow dates
+  CollectedDate > ptCollectedDates[1], 
+  CollectedDate < ptCollectedDates[2]), 
+  aes(x = CollectedDate, y = TRFSAT)) +
+  geom_point(alpha = 0.25, size = 1.5, color = "grey65") +
+  geom_smooth(method = "loess", span = 0.25, se = TRUE,
+              color = "firebrick", fill = "firebrick", alpha = 0.1) +
+  geom_line(data =ptSubset %>% filter( #keep dates within range of ptCollectedDates
+            CollectedDate >= ptCollectedDates[1], # can likely expand this to contain multiple pts w/ group_by feature
+            CollectedDate <= ptCollectedDates[2]),
+            aes(x = CollectedDate, y =TRFSAT),
+            inherit.aes = FALSE, color = "darkslateblue", linewidth = 1.2) +
+ # geom_point(data = weekly_summary %>% filter( #keep dates within range of dateWindow dates
+ #             WeekStart > dateWindow[1], 
+ #             WeekStart < dateWindow[2]),
+ #             aes(x = WeekStart, y = median_HGB),
+ #             inherit.aes = FALSE, color = "steelblue", size = 2) +
+  geom_hline(yintercept = thresholds$TRFSAT, color = "red", linetype = "dashed") +
+  scale_x_date(date_breaks = "3 months", date_labels = "%b %Y") +
+  labs(
+    title = " Individual Pt Hb Saturations Over Time",
+    subtitle = "",
+    x = "Date", y = "Transferrin Saturations (%)"
+  ) +
   scatterplotTheme
+# TODO: ADD table listing pt values below graph
+
 
 
 ```
@@ -441,32 +527,56 @@ ggplot(data= ptSubset,
 # Serum Potassium
 
 ```{r K, echo = FALSE, error = FALSE, message=FALSE, warning=FALSE}
-ggplot(data= coreData, 
-       aes(x=as.Date(Collected, format="%d/%m/%Y %H:%M"), y=K, group=1)) +
-  geom_point() +
-  ylim(-2, 60) +
-  geom_hline(yintercept = 3.5, color = "red") + 
-  geom_hline(yintercept = 5.5, color = "red") +
-  scale_x_date(date_breaks = "1 month", date_labels =  "%b %Y") +
-  geom_smooth(method=stats::loess, se=F, 
-                      method.args=list(degree=0,span=10)) +
-  xlab("Sample Collection Date (Month Year)") +
-  ggtitle("Serum Potassium - Normal Range 3.5-5.5") +
-  scale_y_continuous(limits = c(0,8), breaks = seq(0,10,1)) +
+ggplot(coreData %>% filter( #keep dates within range of dateWindow dates
+  CollectedDate>dateWindow[1], 
+  CollectedDate <dateWindow[2]), 
+  aes(x = CollectedDate, y = K)) +
+  geom_point(alpha = 0.25, size = 1.5, color = "grey40") +
+  geom_smooth(method = "loess", span = 0.25, se = TRUE,
+              color = "firebrick", fill = "firebrick", alpha = 0.2) +
+  geom_line(data = weekly_summary %>% filter( #keep dates within range of dateWindow dates
+            WeekStart > dateWindow[1], 
+            WeekStart < dateWindow[2]), 
+            aes(x = WeekStart, y = median_K),
+            inherit.aes = FALSE, color = "steelblue", linewidth = 1.2) +
+  geom_point(data = weekly_summary %>% filter( #keep dates within range of dateWindow dates
+              WeekStart > dateWindow[1], 
+              WeekStart < dateWindow[2]),
+              aes(x = WeekStart, y = median_K),
+              inherit.aes = FALSE, color = "steelblue", size = 2) +
+  geom_hline(yintercept = thresholds$K, color = "red", linetype = "dashed") +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y") +
+  labs(
+    title = "K Levels Over Time",
+    subtitle = "",
+    x = "Date", y = "K"
+  ) +
   scatterplotTheme
 
-ggplot(data= ptSubset, 
-       aes(x=as.Date(Collected, format="%d/%m/%Y %H:%M"), y=K, group=1)) +
-  geom_point() +
-  ylim(-2, 60) +
-  geom_hline(yintercept = 3.5, color = "red") + 
-  geom_hline(yintercept = 5.5, color = "red") +
-  scale_x_date(date_breaks = "1 month", date_labels =  "%b %Y") +
-  geom_smooth(method=stats::loess, se=F, 
-                      method.args=list(degree=0,span=1)) +
-  xlab("Sample Collection Date (Month Year)") +
-  ggtitle(paste0("Serum Potassium for patient: ", ptURN)) +
-  scale_y_continuous(limits = c(0,8), breaks = seq(0,10,1)) +
+ggplot(coreData %>% filter( #keep dates within range of dateWindow dates
+  CollectedDate > ptCollectedDates[1], 
+  CollectedDate < ptCollectedDates[2]), 
+  aes(x = CollectedDate, y = K)) +
+  geom_point(alpha = 0.25, size = 1.5, color = "grey65") +
+  geom_smooth(method = "loess", span = 0.25, se = TRUE,
+              color = "firebrick", fill = "firebrick", alpha = 0.1) +
+  geom_line(data =ptSubset %>% filter( #keep dates within range of ptCollectedDates
+            CollectedDate >= ptCollectedDates[1], # can likely expand this to contain multiple pts w/ group_by feature
+            CollectedDate <= ptCollectedDates[2]),
+            aes(x = CollectedDate, y =K),
+            inherit.aes = FALSE, color = "darkslateblue", linewidth = 1.2) +
+ # geom_point(data = weekly_summary %>% filter( #keep dates within range of dateWindow dates
+ #             WeekStart > dateWindow[1], 
+ #             WeekStart < dateWindow[2]),
+ #             aes(x = WeekStart, y = median_HGB),
+ #             inherit.aes = FALSE, color = "steelblue", size = 2) +
+  geom_hline(yintercept = thresholds$K, color = "red", linetype = "dashed") +
+  scale_x_date(date_breaks = "3 months", date_labels = "%b %Y") +
+  labs(
+    title = " Individual Pt K Over Time",
+    subtitle = "",
+    x = "Date", y = "Potassium Levels"
+  ) +
   scatterplotTheme
 
 ```
@@ -474,34 +584,56 @@ ggplot(data= ptSubset,
 # Serum Parathyroid Hormone
 
 ```{r PTHR, echo = FALSE, error = FALSE, message=FALSE, warning=FALSE}
-ggplot(data= coreData, 
-       aes(x=as.Date(Collected, format="%d/%m/%Y %H:%M"), y=PTHR, group=1)) +
-  geom_point() +
-  ylim(-2, 60) +
-  geom_hline(yintercept = 15, color = "red") + 
-  geom_hline(yintercept = 65, color = "red") +
-  scale_x_date(date_breaks = "1 month", date_labels =  "%b %Y") +
-  geom_smooth(method=stats::loess, se=F, 
-                      method.args=list(degree=0,span=10)) +
-  xlab("Sample Collection Date (Month Year)") +
-  ggtitle("Serum Parathyroid Hormone - Normal Range ?15-65") +
-  scale_y_continuous(limits = c(0,180), breaks = seq(0,180,20)) +
+ggplot(coreData %>% filter( #keep dates within range of dateWindow dates
+  CollectedDate>dateWindow[1], 
+  CollectedDate <dateWindow[2]), 
+  aes(x = CollectedDate, y = PTHR)) +
+  geom_point(alpha = 0.25, size = 1.5, color = "grey40") +
+  geom_smooth(method = "loess", span = 0.25, se = TRUE,
+              color = "firebrick", fill = "firebrick", alpha = 0.2) +
+  geom_line(data = weekly_summary %>% filter( #keep dates within range of dateWindow dates
+            WeekStart > dateWindow[1], 
+            WeekStart < dateWindow[2]), 
+            aes(x = WeekStart, y = median_PTHR),
+            inherit.aes = FALSE, color = "steelblue", linewidth = 1.2) +
+  geom_point(data = weekly_summary %>% filter( #keep dates within range of dateWindow dates
+              WeekStart > dateWindow[1], 
+              WeekStart < dateWindow[2]),
+              aes(x = WeekStart, y = median_PTHR),
+              inherit.aes = FALSE, color = "steelblue", size = 2) +
+  geom_hline(yintercept = thresholds$PTHR, color = "red", linetype = "dashed") +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y") +
+  labs(
+    title = "PTHR Levels Over Time",
+    subtitle = "",
+    x = "Date", y = "PTH Levels"
+  ) +
   scatterplotTheme
 
-# Pt Dataset 
-
-ggplot(data= ptSubset, 
-       aes(x=as.Date(Collected, format="%d/%m/%Y %H:%M"), y=PTHR, group=1)) +
-  geom_point() +
-  ylim(-2, 60) +
-  geom_hline(yintercept = 15, color = "red") + 
-  geom_hline(yintercept = 65, color = "red") +
-  scale_x_date(date_breaks = "1 month", date_labels =  "%b %Y") +
-  geom_smooth(method=stats::loess, se=F, 
-                      method.args=list(degree=0,span=1)) +
-  xlab("Sample Collection Date (Month Year)") +
-  ggtitle(paste0("Serum Parathyroid Hormone for patient: ", ptURN)) +
-  scale_y_continuous(limits = c(0,180), breaks = seq(0,180,20)) +
+ggplot(coreData %>% filter( #keep dates within range of dateWindow dates
+  CollectedDate > ptCollectedDates[1], 
+  CollectedDate < ptCollectedDates[2]), 
+  aes(x = CollectedDate, y = PTHR)) +
+  geom_point(alpha = 0.25, size = 1.5, color = "grey65") +
+  geom_smooth(method = "loess", span = 0.25, se = TRUE,
+              color = "firebrick", fill = "firebrick", alpha = 0.1) +
+  geom_line(data =ptSubset %>% filter( #keep dates within range of ptCollectedDates
+            CollectedDate >= ptCollectedDates[1], # can likely expand this to contain multiple pts w/ group_by feature
+            CollectedDate <= ptCollectedDates[2]),
+            aes(x = CollectedDate, y =PTHR),
+            inherit.aes = FALSE, color = "darkslateblue", linewidth = 1.2) +
+ # geom_point(data = weekly_summary %>% filter( #keep dates within range of dateWindow dates
+ #             WeekStart > dateWindow[1], 
+ #             WeekStart < dateWindow[2]),
+ #             aes(x = WeekStart, y = median_HGB),
+ #             inherit.aes = FALSE, color = "steelblue", size = 2) +
+  geom_hline(yintercept = thresholds$PTHR, color = "red", linetype = "dashed") +
+  scale_x_date(date_breaks = "3 months", date_labels = "%b %Y") +
+  labs(
+    title = " Individual Pt PTHR Over Time",
+    subtitle = "",
+    x = "Date", y = "Parathyroid Hormone Levels"
+  ) +
   scatterplotTheme
 
 ```
@@ -509,32 +641,56 @@ ggplot(data= ptSubset,
 # Serum Phosphate
 
 ```{r PHOS, echo = FALSE, error = FALSE, message=FALSE, warning=FALSE}
-ggplot(data= coreData, 
-       aes(x=as.Date(Collected, format="%d/%m/%Y %H:%M"), y=PHOS, group=1)) +
-  geom_point() +
-  ylim(-2, 60) +
-  geom_hline(yintercept = 2, color = "red") + 
-  geom_hline(yintercept = 4, color = "red") +
-  scale_x_date(date_breaks = "1 month", date_labels =  "%b %Y") +
-  geom_smooth(method=stats::loess, se=F, 
-                      method.args=list(degree=0,span=10)) +
-  xlab("Sample Collection Date (Month Year)") +
-  ggtitle("Serum Phosphate Levels - Normal Range 2-4") +
-  scale_y_continuous(limits = c(1,5), breaks = seq(0,5,0.5)) +
+ggplot(coreData %>% filter( #keep dates within range of dateWindow dates
+  CollectedDate>dateWindow[1], 
+  CollectedDate <dateWindow[2]), 
+  aes(x = CollectedDate, y = PHOS)) +
+  geom_point(alpha = 0.25, size = 1.5, color = "grey40") +
+  geom_smooth(method = "loess", span = 0.25, se = TRUE,
+              color = "firebrick", fill = "firebrick", alpha = 0.2) +
+  geom_line(data = weekly_summary %>% filter( #keep dates within range of dateWindow dates
+            WeekStart > dateWindow[1], 
+            WeekStart < dateWindow[2]), 
+            aes(x = WeekStart, y = median_PHOS),
+            inherit.aes = FALSE, color = "steelblue", linewidth = 1.2) +
+  geom_point(data = weekly_summary %>% filter( #keep dates within range of dateWindow dates
+              WeekStart > dateWindow[1], 
+              WeekStart < dateWindow[2]),
+              aes(x = WeekStart, y = median_PHOS),
+              inherit.aes = FALSE, color = "steelblue", size = 2) +
+  geom_hline(yintercept = thresholds$PHOS, color = "red", linetype = "dashed") +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y") +
+  labs(
+    title = "PHOS Levels Over Time",
+    subtitle = "",
+    x = "Date", y = "Phosphate"
+  ) +
   scatterplotTheme
 
-ggplot(data= ptSubset, 
-       aes(x=as.Date(Collected, format="%d/%m/%Y %H:%M"), y=PHOS, group=1)) +
-  geom_point() +
-  ylim(-2, 60) +
-  geom_hline(yintercept = 2, color = "red") + 
-  geom_hline(yintercept = 4, color = "red") +
-  scale_x_date(date_breaks = "1 month", date_labels =  "%b %Y") +
-  geom_smooth(method=stats::loess, se=F, 
-                      method.args=list(degree=0,span=1)) +
-  xlab("Sample Collection Date (Month Year)") +
-  ggtitle(paste0("Serum Phosphate Levels for patient: ", ptURN)) +
-  scale_y_continuous(limits = c(1,5), breaks = seq(0,5,0.5)) +
+ggplot(coreData %>% filter( #keep dates within range of dateWindow dates
+  CollectedDate > ptCollectedDates[1], 
+  CollectedDate < ptCollectedDates[2]), 
+  aes(x = CollectedDate, y = PHOS)) +
+  geom_point(alpha = 0.25, size = 1.5, color = "grey65") +
+  geom_smooth(method = "loess", span = 0.25, se = TRUE,
+              color = "firebrick", fill = "firebrick", alpha = 0.1) +
+  geom_line(data =ptSubset %>% filter( #keep dates within range of ptCollectedDates
+            CollectedDate >= ptCollectedDates[1], # can likely expand this to contain multiple pts w/ group_by feature
+            CollectedDate <= ptCollectedDates[2]),
+            aes(x = CollectedDate, y =PHOS),
+            inherit.aes = FALSE, color = "darkslateblue", linewidth = 1.2) +
+ # geom_point(data = weekly_summary %>% filter( #keep dates within range of dateWindow dates
+ #             WeekStart > dateWindow[1], 
+ #             WeekStart < dateWindow[2]),
+ #             aes(x = WeekStart, y = median_HGB),
+ #             inherit.aes = FALSE, color = "steelblue", size = 2) +
+  geom_hline(yintercept = thresholds$PHOS, color = "red", linetype = "dashed") +
+  scale_x_date(date_breaks = "3 months", date_labels = "%b %Y") +
+  labs(
+    title = " Individual Pt PHOS Over Time",
+    subtitle = "",
+    x = "Date", y = "Phosphate Levels"
+  ) +
   scatterplotTheme
 
 ```
@@ -542,33 +698,56 @@ ggplot(data= ptSubset,
 # Serum Calcium
 
 ```{r CAL, echo = FALSE, error = FALSE, message=FALSE, warning=FALSE}
-ggplot(data= coreData, 
-       aes(x=as.Date(Collected, format="%d/%m/%Y %H:%M"), y=CAL, group=1)) +
-  geom_point() +
-  ylim(-2, 60) +
-  geom_hline(yintercept = 2.10, color = "red") + 
-  geom_hline(yintercept = 2.60, color = "red") +
-  scale_x_date(date_breaks = "1 month", date_labels =  "%b %Y") +
-  geom_smooth(method=stats::loess, se=F, 
-                      method.args=list(degree=0,span=10)) +
-  xlab("Sample Collection Date (Month Year)") +
-  ggtitle("Serum Calcium Levels - Normal Range 2.10-2.60") +
-  scale_y_continuous(limits = c(1,3), breaks = seq(0,3,0.5)) +
+ggplot(coreData %>% filter( #keep dates within range of dateWindow dates
+  CollectedDate>dateWindow[1], 
+  CollectedDate <dateWindow[2]), 
+  aes(x = CollectedDate, y = CAL)) +
+  geom_point(alpha = 0.25, size = 1.5, color = "grey40") +
+  geom_smooth(method = "loess", span = 0.25, se = TRUE,
+              color = "firebrick", fill = "firebrick", alpha = 0.2) +
+  geom_line(data = weekly_summary %>% filter( #keep dates within range of dateWindow dates
+            WeekStart > dateWindow[1], 
+            WeekStart < dateWindow[2]), 
+            aes(x = WeekStart, y = median_CAL),
+            inherit.aes = FALSE, color = "steelblue", linewidth = 1.2) +
+  geom_point(data = weekly_summary %>% filter( #keep dates within range of dateWindow dates
+              WeekStart > dateWindow[1], 
+              WeekStart < dateWindow[2]),
+              aes(x = WeekStart, y = median_CAL),
+              inherit.aes = FALSE, color = "steelblue", size = 2) +
+  geom_hline(yintercept = thresholds$CAL, color = "red", linetype = "dashed") +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y") +
+  labs(
+    title = "Calcium Levels Over Time",
+    subtitle = "",
+    x = "Date", y = "Calcium"
+  ) +
   scatterplotTheme
 
-ggplot(data= ptSubset, 
-       aes(x=as.Date(Collected, format="%d/%m/%Y %H:%M"), y=CAL, group=1)) +
-  geom_point() +
-  ylim(-2, 60) +
-  geom_hline(yintercept = 2.10, color = "red") + 
-  geom_hline(yintercept = 2.60, color = "red") +
-  scale_x_date(date_breaks = "1 month", date_labels =  "%b %Y") +
-  geom_smooth(method=stats::loess, se=F, 
-                      method.args=list(degree=0,span=1)) +
-  xlab("Sample Collection Date (Month Year)") +
-  ggtitle(" - Normal Range ") +
-  ggtitle(paste0("Serum Calcium Levels for patient: ", ptURN)) +
-  scale_y_continuous(limits = c(1,3), breaks = seq(0,3,0.5)) +
+ggplot(coreData %>% filter( #keep dates within range of dateWindow dates
+  CollectedDate > ptCollectedDates[1], 
+  CollectedDate < ptCollectedDates[2]), 
+  aes(x = CollectedDate, y = CAL)) +
+  geom_point(alpha = 0.25, size = 1.5, color = "grey65") +
+  geom_smooth(method = "loess", span = 0.25, se = TRUE,
+              color = "firebrick", fill = "firebrick", alpha = 0.1) +
+  geom_line(data =ptSubset %>% filter( #keep dates within range of ptCollectedDates
+            CollectedDate >= ptCollectedDates[1], # can likely expand this to contain multiple pts w/ group_by feature
+            CollectedDate <= ptCollectedDates[2]),
+            aes(x = CollectedDate, y =CAL),
+            inherit.aes = FALSE, color = "darkslateblue", linewidth = 1.2) +
+ # geom_point(data = weekly_summary %>% filter( #keep dates within range of dateWindow dates
+ #             WeekStart > dateWindow[1], 
+ #             WeekStart < dateWindow[2]),
+ #             aes(x = WeekStart, y = median_HGB),
+ #             inherit.aes = FALSE, color = "steelblue", size = 2) +
+  geom_hline(yintercept = thresholds$CAL, color = "red", linetype = "dashed") +
+  scale_x_date(date_breaks = "3 months", date_labels = "%b %Y") +
+  labs(
+    title = " Individual Pt calcium Over Time",
+    subtitle = "",
+    x = "Date", y = "Calcium Levels"
+  ) +
   scatterplotTheme
 
 ```
@@ -576,32 +755,56 @@ ggplot(data= ptSubset,
 # Serum Albumin
 
 ```{r ALB, echo = FALSE, error = FALSE, message=FALSE, warning=FALSE}
-ggplot(data= coreData, 
-       aes(x=as.Date(Collected, format="%d/%m/%Y %H:%M"), y=ALB, group=1)) +
-  geom_point() +
-  ylim(-2, 60) +
-  geom_hline(yintercept = 19, color = "red") + 
-  geom_hline(yintercept = 26, color = "red") +
-  scale_x_date(date_breaks = "1 month", date_labels =  "%b %Y") +
-  geom_smooth(method=stats::loess, se=F, 
-                      method.args=list(degree=0,span=10)) +
-  xlab("Sample Collection Date (Month Year)") +
-  ggtitle("Serum Albumin Levels - Normal Range 19-26") +
-  scale_y_continuous(limits = c(10,35), breaks = seq(0,35,5)) +
+ggplot(coreData %>% filter( #keep dates within range of dateWindow dates
+  CollectedDate>dateWindow[1], 
+  CollectedDate <dateWindow[2]), 
+  aes(x = CollectedDate, y = ALB)) +
+  geom_point(alpha = 0.25, size = 1.5, color = "grey40") +
+  geom_smooth(method = "loess", span = 0.25, se = TRUE,
+              color = "firebrick", fill = "firebrick", alpha = 0.2) +
+  geom_line(data = weekly_summary %>% filter( #keep dates within range of dateWindow dates
+            WeekStart > dateWindow[1], 
+            WeekStart < dateWindow[2]), 
+            aes(x = WeekStart, y = median_ALB),
+            inherit.aes = FALSE, color = "steelblue", linewidth = 1.2) +
+  geom_point(data = weekly_summary %>% filter( #keep dates within range of dateWindow dates
+              WeekStart > dateWindow[1], 
+              WeekStart < dateWindow[2]),
+              aes(x = WeekStart, y = median_ALB),
+              inherit.aes = FALSE, color = "steelblue", size = 2) +
+  geom_hline(yintercept = thresholds$ALB, color = "red", linetype = "dashed") +
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y") +
+  labs(
+    title = "Albumin levels Over Time",
+    subtitle = "",
+    x = "Date", y = "Albumin"
+  ) +
   scatterplotTheme
 
-ggplot(data= ptSubset, 
-       aes(x=as.Date(Collected, format="%d/%m/%Y %H:%M"), y=ALB, group=1)) +
-  geom_point() +
-  ylim(-2, 60) +
-  geom_hline(yintercept = 19, color = "red") + 
-  geom_hline(yintercept = 26, color = "red") +
-  scale_x_date(date_breaks = "1 month", date_labels =  "%b %Y") +
-  geom_smooth(method=stats::loess, se=F, 
-                      method.args=list(degree=0,span=1)) +
-  xlab("Sample Collection Date (Month Year)") +
-  ggtitle(paste0("Serum Albumin Levels for patient: ", ptURN)) +
-  scale_y_continuous(limits = c(10,35), breaks = seq(0,35,5)) +
+ggplot(coreData %>% filter( #keep dates within range of dateWindow dates
+  CollectedDate > ptCollectedDates[1], 
+  CollectedDate < ptCollectedDates[2]), 
+  aes(x = CollectedDate, y = ALB)) +
+  geom_point(alpha = 0.25, size = 1.5, color = "grey65") +
+  geom_smooth(method = "loess", span = 0.25, se = TRUE,
+              color = "firebrick", fill = "firebrick", alpha = 0.1) +
+  geom_line(data =ptSubset %>% filter( #keep dates within range of ptCollectedDates
+            CollectedDate >= ptCollectedDates[1], # can likely expand this to contain multiple pts w/ group_by feature
+            CollectedDate <= ptCollectedDates[2]),
+            aes(x = CollectedDate, y =ALB),
+            inherit.aes = FALSE, color = "darkslateblue", linewidth = 1.2) +
+ # geom_point(data = weekly_summary %>% filter( #keep dates within range of dateWindow dates
+ #             WeekStart > dateWindow[1], 
+ #             WeekStart < dateWindow[2]),
+ #             aes(x = WeekStart, y = median_HGB),
+ #             inherit.aes = FALSE, color = "steelblue", size = 2) +
+  geom_hline(yintercept = thresholds$ALB, color = "red", linetype = "dashed") +
+  scale_x_date(date_breaks = "3 months", date_labels = "%b %Y") +
+  labs(
+    title = " Individual Pt Albumin Over Time",
+    subtitle = "",
+    x = "Date", y = "Albumin levels"
+  ) +
   scatterplotTheme
 
 ```
