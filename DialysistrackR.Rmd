@@ -3,8 +3,11 @@ title: "dialysistrackR"
 output:
   pdf_document:
     latex_engine: xelatex
+    keep_tex: true
+    includes:
+      in_header: sansfont.tex ##check out the writelines command in scratch if not working, run that first mate
   html_document: default
-date: "2025-06-02"
+date: "`r Sys.Date()`"
 ---
 
 
@@ -18,6 +21,23 @@ The content that follows represents the current state of shared analysis, with o
 ```{r dataload, include=FALSE, warning=FALSE, message=FALSE}
 ## Dependencies ---- 
 # TinyTeX (Latex renderer)
+library(readr)
+library(tidyverse)
+library(lubridate)
+library(knitr)
+library(kableExtra)
+library(tinytex)
+
+### function update - for the smushed x axis
+
+scatterplotTheme <- theme_minimal() +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.title.y = element_text(angle = 90, vjust = 0.5),
+    axis.title.x = element_text(vjust = -1),
+    axis.text.x = element_text(angle = 45, hjust = 1)  # Rotate x-axis labels
+  )
 
 
 ### Global Vars
@@ -27,15 +47,11 @@ ptURN <- "RB111111"
 
 # There may be changes to data format as Nick refines his workflow, but some of the principles will remain the same and this data cleaning section we can update until the pipeline stabilises
 
-library(readr)
-library(tidyverse)
-library(tinytex)
+
 
 #read in data ----
 coreData <- read_csv("DUMMY_DAT.csv", na = c("", " ", "NA")) ## nice use of readr btw
 
-# Time data
-library(lubridate)
 
 coreData <- coreData %>%
   mutate(
@@ -43,126 +59,239 @@ coreData <- coreData %>%
     CollectedDate = as.Date(Collected)     # Keep just the date part - we can use this bit for graphs later.
   )
 
-## create a few more dates so we can practice graphing over time.
 
-library(dplyr)
-library(stringr)
 
-library(knitr)
-library(kableExtra)
+# Global vars
+ptURN <- "RB111111"
 
-set.seed(42) #Ultimate Question of Life, the Universe, and Everything
+# Create synthetic patient IDs
+n_patients <- 500
+existing_urs <- paste0("RB", sprintf("%06d", sample(100000:999999, n_patients)))
 
-# Get existing UR numbers
-existing_urs <- unique(coreData$`Ur Number`)
+# Define normal lab means and SDs
+lab_means <- list(
+  HGB = 110, TRFSAT = 30, K = 4.5, PTHR = 50, PHOS = 1.6, CAL = 2.3, ALB = 38
+)
+lab_sds <- list(
+  HGB = 8, TRFSAT = 5, K = 0.3, PTHR = 10, PHOS = 0.2, CAL = 0.1, ALB = 3
+)
 
-# Define variable ranges 
-range_hgb   <- range(coreData$HGB, na.rm = TRUE)
-range_trf   <- range(coreData$TRFSAT, na.rm = TRUE)
-range_k     <- range(coreData$K, na.rm = TRUE)
-range_pthr  <- range(coreData$PTHR, na.rm = TRUE)
-range_phos  <- range(coreData$PHOS, na.rm = TRUE)
-range_cal   <- range(coreData$CAL, na.rm = TRUE)
-range_alb   <- range(coreData$ALB, na.rm = TRUE)
-hbsab_vals  <- unique(coreData$HBSAB)
+# Drift assignment for ~15% of patients
+n_drift <- round(0.15 * n_patients)
+drift_map <- rep("normal", n_patients)
+drift_map[sample(1:n_patients, n_drift / 2)] <- "low"
+drift_map[sample(setdiff(1:n_patients, which(drift_map == "low")), n_drift / 2)] <- "high"
+names(drift_map) <- existing_urs
 
-# Create synthetic data spaced 4 months apart
-generate_longitudinal <- function(ur_number, start_date = as.Date("2023-01-01")) {
+# Synthetic longitudinal data generator
+generate_longitudinal <- function(ur_number, drift_type = "normal") {
+  drift <- switch(drift_type, "low" = -1, "high" = +1, "normal" = 0)
+
+  # Set the start date so the final (12th) sample lands near today
+  start_date <- Sys.Date() %m-% months(11)
+
   tibble(
     `Ur Number` = ur_number,
-    Collected = format(
-      start_date + 
-        months(seq(0, by = 4, length.out = 5)) + 
-        days(sample(0:5, 5, replace = TRUE)) + 
-        hours(sample(6:16, 5, replace = TRUE)),
-      format = "%d/%m/%Y %H:%M"
-    ),
-    HGB    = sample(seq(range_hgb[1], range_hgb[2]), 5, replace = TRUE),
-    TRFSAT = sample(seq(range_trf[1], range_trf[2]), 5, replace = TRUE),
-    K      = sample(seq(range_k[1], range_k[2]), 5, replace = TRUE),
-    PTHR   = sample(seq(range_pthr[1], range_pthr[2]), 5, replace = TRUE),
-    PHOS   = sample(seq(range_phos[1], range_phos[2]), 5, replace = TRUE),
-    CAL    = sample(seq(range_cal[1], range_cal[2]), 5, replace = TRUE),
-    ALB    = sample(seq(range_alb[1], range_alb[2]), 5, replace = TRUE),
-    HBSAB  = sample(hbsab_vals, 5, replace = TRUE)
+    Collected = start_date + 
+      months(0:11) + 
+      days(sample(-3:3, 12, replace = TRUE)) + 
+      hours(sample(6:16, 12, replace = TRUE)),
+    HGB    = round(rnorm(12, lab_means$HGB + drift * 15, lab_sds$HGB), 1),
+    TRFSAT = round(rnorm(12, lab_means$TRFSAT + drift * 10, lab_sds$TRFSAT), 1),
+    K      = round(rnorm(12, lab_means$K + drift * 0.8, lab_sds$K), 2),
+    PTHR   = round(rnorm(12, lab_means$PTHR + drift * 30, lab_sds$PTHR)),
+    PHOS   = round(rnorm(12, lab_means$PHOS + drift * 0.5, lab_sds$PHOS), 2),
+    CAL    = round(rnorm(12, lab_means$CAL + drift * 0.15, lab_sds$CAL), 2),
+    ALB    = round(rnorm(12, lab_means$ALB + drift * 4, lab_sds$ALB), 1),
+    HBSAB  = sample(c(">1000", "10-1000", "<10"), 12, replace = TRUE, prob = c(0.7, 0.25, 0.05))
   )
 }
 
-# Generate and bind all
-longitudinal_data <- bind_rows(lapply(existing_urs, generate_longitudinal))
+# Generate full dataset
+coreData <- bind_rows(lapply(existing_urs, function(ur) {
+  generate_longitudinal(ur_number = ur, drift_type = drift_map[[ur]])
+})) %>%
+  mutate(
+    Collected = as.POSIXct(Collected),
+    CollectedDate = as.Date(Collected)
+  )
 
-# Convert the 'Collected' column in longitudinal_data to datetime (otherwise throws errors when binding rows)
-longitudinal_data <- longitudinal_data %>%
-  mutate(Collected = dmy_hm(Collected))
 
+# Create synthetic data spaced 4 months apart - have a better way now
+#generate_longitudinal <- function(ur_number, start_date = as.Date("2023-01-01")) {
+#  tibble(
+#    `Ur Number` = ur_number,
+#    Collected = format(
+#      start_date + 
+#        months(seq(0, by = 4, length.out = 5)) + 
+#        days(sample(0:5, 5, replace = TRUE)) + 
+#        hours(sample(6:16, 5, replace = TRUE)),
+#      format = "%d/%m/%Y %H:%M"
+#    ),
+#    HGB    = sample(seq(range_hgb[1], range_hgb[2]), 5, replace = TRUE),
+#    TRFSAT = sample(seq(range_trf[1], range_trf[2]), 5, replace = TRUE),
+#    K      = sample(seq(range_k[1], range_k[2]), 5, replace = TRUE),
+#    PTHR   = sample(seq(range_pthr[1], range_pthr[2]), 5, replace = TRUE),
+#    PHOS   = sample(seq(range_phos[1], range_phos[2]), 5, replace = TRUE),
+#    CAL    = sample(seq(range_cal[1], range_cal[2]), 5, replace = TRUE),
+#    ALB    = sample(seq(range_alb[1], range_alb[2]), 5, replace = TRUE),
+#    HBSAB  = sample(hbsab_vals, 5, replace = TRUE)
+#  )
+#}
 
-# Combine with OG data
-coreData <- bind_rows(coreData, longitudinal_data)
-
-##lazy
- ptSubset<-coreData %>% filter(`Ur Number` == ptURN)## can clean this later - I just couldnt be bothered cleaning up the object names below
 
 ```
 
 ## Haemoglobin
 
-```{r hgb_loess_plus_sd, echo=FALSE, warning=FALSE, message=FALSE}
 
-# Step 1: Create a WeekStart column (floored to Monday)
+```{r plot_function_trend_tables, echo=FALSE, warning=FALSE, message=FALSE}
+
+## this might be easier, generic functions, can expand
+## now a summary table
+library(dplyr)
+library(tidyr)
+library(knitr)
+library(kableExtra)
+
+
+plot_lab_trend <- function(df, lab_var, date_range, y_label = NULL, y_limits = NULL) {
+  lab_var <- rlang::ensym(lab_var)
+
+  # Calculate weekly median
+  weekly_summary <- df %>%
+    mutate(WeekStart = lubridate::floor_date(CollectedDate, unit = "week", week_start = 1)) %>%
+    group_by(WeekStart) %>%
+    summarise(median_value = median(!!lab_var, na.rm = TRUE), .groups = "drop")
+
+  # Build plot
+  ggplot(df %>% filter(CollectedDate > date_range[1], CollectedDate < date_range[2]), 
+         aes(x = CollectedDate, y = !!lab_var)) +
+    geom_point(
+      position = position_jitter(width = 5, height = 0),
+      alpha = 0.25, size = 1.5, color = "grey40"
+    ) +
+    geom_smooth(method = "loess", span = 0.25, se = TRUE,
+                color = "firebrick", fill = "firebrick", alpha = 0.2) +
+    geom_line(
+      data = weekly_summary %>% filter(WeekStart > date_range[1], WeekStart < date_range[2]), 
+      aes(x = WeekStart, y = median_value),
+      inherit.aes = FALSE, color = "steelblue", linewidth = 1.2
+    ) +
+    geom_point(
+      data = weekly_summary %>% filter(WeekStart > date_range[1], WeekStart < date_range[2]), 
+      aes(x = WeekStart, y = median_value),
+      inherit.aes = FALSE, color = "steelblue", size = 2
+    ) +
+    {if (!is.null(y_limits)) geom_hline(yintercept = y_limits, color = "red", linetype = "dashed")} +
+    scale_x_date(date_breaks = "1 month", date_labels = "%b %Y") +
+    labs(
+      title = paste0(rlang::as_label(lab_var), " Over Time"),
+      x = "Date", y = y_label %||% rlang::as_label(lab_var)
+    ) +
+    theme_minimal() +
+    theme(
+      panel.grid.major = element_blank(),
+      panel.grid.minor = element_blank(),
+      axis.title.y = element_text(angle = 90, vjust = 0.5),
+      axis.title.x = element_text(vjust = -1),
+      axis.text.x = element_text(angle = 45, hjust = 1)
+    )
+}
+
+
+
+
+## flag outputs
 coreData <- coreData %>%
-  mutate(WeekStart = lubridate::floor_date(CollectedDate, unit = "week", week_start = 1))
-
-# Step 2: Calculate weekly median HGB
-weekly_summary <- coreData %>%
-  group_by(WeekStart) %>%
-  summarise(
-    median_HGB = median(HGB, na.rm = TRUE),
-#    median_delta_HGB = median(delta_HGB, na.rm = TRUE),
-    median_TRFSAT = median(TRFSAT, na.rm = TRUE),
-    median_K = median(K, na.rm = TRUE),
-    median_PTHR = median(PTHR, na.rm = TRUE),
-    median_PHOS = median(PHOS, na.rm = TRUE),
-    median_CAL = median(CAL, na.rm = TRUE),
-    median_ALB = median(ALB, na.rm = TRUE),
-    .groups = "drop"
+  mutate(
+    HGB_flag = case_when(
+      HGB < 80 ~ "Low",
+      HGB > 120 ~ "High",
+      !is.na(HGB) ~ "Target",
+      TRUE ~ NA_character_
+    ),
+    ALB_flag = case_when(
+      ALB < 35 ~ "Low",
+      ALB >= 35 & ALB <= 50 ~ "Target",
+      ALB > 50 ~ "High",
+      TRUE ~ NA_character_
+    ),
+    PHOS_flag = case_when(
+      PHOS < 1.1 ~ "Low",
+      PHOS > 1.8 ~ "High",
+      !is.na(PHOS) ~ "Target",
+      TRUE ~ NA_character_
+    ),
+    PTHR_flag = case_when(
+      PTHR < 15 ~ "Low",
+      PTHR > 90 ~ "High",
+      !is.na(PTHR) ~ "Target",
+      TRUE ~ NA_character_
+    ),
+    TRFSAT_flag = case_when(
+      TRFSAT < 20 ~ "Low",
+      TRFSAT > 50 ~ "High",
+      !is.na(TRFSAT) ~ "Target",
+      TRUE ~ NA_character_
+    )
   )
 
-scatterplotTheme <- theme_minimal() +
-  theme(
-    panel.grid.major = element_blank(),
-    panel.grid.minor = element_blank(),
-    axis.title.y = element_text(angle = 90, vjust = 0.5),  # <-- vertical
-    axis.title.x = element_text(vjust = -1)
-  )
-# Take data in specific window
-dateWindow <- c("2025-01-01", "2025-12-12")
 
-# Step 3: Plot with LOESS and weekly median
-ggplot(coreData %>% filter( #keep dates within range of dateWindow dates
-  CollectedDate>dateWindow[1], 
-  CollectedDate <dateWindow[2]), 
-  aes(x = CollectedDate, y = HGB)) +
-  geom_point(alpha = 0.25, size = 1.5, color = "grey40") +
-  geom_smooth(method = "loess", span = 0.25, se = TRUE,
-              color = "firebrick", fill = "firebrick", alpha = 0.2) +
-  geom_line(data = weekly_summary %>% filter( #keep dates within range of dateWindow dates
-  WeekStart > dateWindow[1], 
-  WeekStart < dateWindow[2]), 
-            aes(x = WeekStart, y = median_HGB),
-            inherit.aes = FALSE, color = "steelblue", linewidth = 1.2) +
-  geom_point(data = weekly_summary %>% filter( #keep dates within range of dateWindow dates
-  WeekStart > dateWindow[1], 
-  WeekStart < dateWindow[2]),
-             aes(x = WeekStart, y = median_HGB),
-             inherit.aes = FALSE, color = "steelblue", size = 2) +
-  geom_hline(yintercept = c(80, 120), color = "red", linetype = "dashed") +
-  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y") +
-  labs(
-    title = "Haemoglobin Levels Over Time",
-    subtitle = "",
-    x = "Date", y = "Haemoglobin (g/L)"
-  ) +
-  scatterplotTheme
+
+#Add flag + trend 
+coreData_with_trend <- coreData %>%
+  arrange(`Ur Number`, Collected) %>%
+  group_by(`Ur Number`) %>%
+  mutate(
+    previous_HGB = lag(HGB),
+    HGB_flag = case_when(
+      HGB < 80 ~ "Low",
+      HGB > 120 ~ "High",
+      TRUE ~ "Target"
+    ),
+    HGB_trend = case_when(
+      is.na(previous_HGB) | is.na(HGB) ~ NA_character_,
+      HGB - previous_HGB > 10 ~ "↑ Rising",
+      HGB - previous_HGB < -10 ~ "↓ Falling"
+    )
+  ) %>%
+  ungroup()
+
+# table
+coreData_with_trend %>%
+  group_by(`Ur Number`) %>%
+  filter(Collected == max(Collected, na.rm = TRUE)) %>%  # ← Get most recent row per patient
+  ungroup() %>%
+  filter(HGB_flag %in% c("High", "Low")) %>%
+  select(`Ur Number`, Collected, HGB, HGB_flag, HGB_trend) %>%
+  arrange(`Ur Number`, Collected) %>%
+  mutate(Collected = format(Collected, "%d-%b-%Y")) %>%
+  kbl(
+    caption = "Most Recent Haemoglobin Results Outside Target Range",
+    col.names = c("Patient UR", "Date", "HGB (g/L)", "Flag", "Trend"),
+    booktabs = TRUE,
+    align = "lcccl"
+  ) %>%
+  kable_styling(latex_options = c("striped", "hold_position"))%>%
+  add_footnote(
+    label = "Trend indicates a change of 10 units as compared to prior result, regardless of date. Only patients with High or Low results are shown.",
+    notation = "none"
+  )
+
+
+## thhis is much easier to work with I think going forwards
+# Calculate last 6 months range from today's date
+plot_lab_trend(
+  coreData,
+  HGB,
+  date_range = c(Sys.Date() %m-% months(6), Sys.Date()),
+  y_label = "HGB (g/L)",
+  y_limits = c(80, 120)
+)
+
+
+
 
 ```
 
@@ -180,7 +309,253 @@ This plot visualises haemoglobin (HGB) levels across the unit over time. Unit-le
 
 -   Red dashed lines: The Kidney Health Service’s target haemoglobin range (80–120 g/L). Values falling persistently outside this band may indicate a need for clinical review at the unit or system level.
 
-## Haemoglobin Results by Target Range
+
+```{r Individual_patients, echo=FALSE, warning=FALSE, message=FALSE}
+
+library(scales)  # for percent formatting
+
+# Summarise trend proportions (last sample per patient)
+trend_summary <- coreData_with_trend %>%
+  group_by(`Ur Number`) %>%
+  filter(CollectedDate == max(CollectedDate, na.rm = TRUE)) %>%
+  ungroup() %>%
+  count(HGB_trend) %>%
+  mutate(p = n / sum(n))
+
+# Build the plot
+ggplot(coreData_with_trend, aes(x = CollectedDate, y = HGB, group = `Ur Number`)) +
+  
+  # Background points (stable, forgettem)
+  geom_line(data = coreData_with_trend %>% filter(HGB_trend == "→ Stable"),
+            aes(group = `Ur Number`), color = "grey80", alpha = 0.4, linewidth = 0.6) +
+  geom_point(data = coreData_with_trend %>% filter(HGB_trend == "→ Stable"),
+             color = "grey70", size = 1.2, alpha = 0.3,
+             position = position_jitter(width = 3, height = 0)) +
+  
+  # Foreground lines (rising/falling)
+  geom_line(data = coreData_with_trend %>% filter(HGB_trend %in% c("↑ Rising", "↓ Falling")),
+            aes(color = HGB_trend), linewidth = 0.8, alpha = 0.4) +
+  geom_point(data = coreData_with_trend %>% filter(HGB_trend %in% c("↑ Rising", "↓ Falling")),
+             aes(color = HGB_trend), size = 1.8,
+             position = position_jitter(width = 3, height = 0)) +
+
+  geom_hline(yintercept = c(80, 120), linetype = "dashed", color = "grey60") +
+
+  scale_color_manual(
+    values = c("↑ Rising" = "forestgreen", "↓ Falling" = "firebrick")
+  ) +
+
+  # Monthly x-axis
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y", expand = c(0.01, 0.01)) +
+
+  labs(
+    title = "Haemoglobin Trends by Patient",
+    subtitle = paste0("Last test trends: ",
+                      percent(trend_summary$p[trend_summary$HGB_trend == "↓ Falling"], accuracy = 1),
+                      " falling, ",
+                      percent(trend_summary$p[trend_summary$HGB_trend == "↑ Rising"], accuracy = 1),
+                      " rising"),
+    x = "Date",
+    y = "HGB (g/L)",
+    color = "Trend"
+  ) +
+
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+## this might be useful on a per units analysis, hard to use with the massive glob of data
+library(scales)  # for percent formatting
+
+
+
+### new idea - would be great for indivudal units
+
+
+
+
+# Subset 50 patients and last 6 months of data
+set.seed(42)
+subset_ids <- sample(unique(coreData_with_trend$`Ur Number`), 50)
+latest_date <- max(coreData_with_trend$CollectedDate, na.rm = TRUE)
+
+subset_data <- coreData_with_trend %>%
+  filter(
+    `Ur Number` %in% subset_ids,
+    CollectedDate >= latest_date %m-% months(6)
+  )
+
+# Trend summary on last sample per patient
+trend_summary <- coreData_with_trend %>%
+  filter(`Ur Number` %in% subset_ids) %>%
+  group_by(`Ur Number`) %>%
+  filter(CollectedDate == max(CollectedDate, na.rm = TRUE)) %>%
+  ungroup() %>%
+  count(HGB_trend) %>%
+  complete(HGB_trend = c("↓ Falling", "↑ Rising", "→ Stable"), fill = list(n = 0)) %>%
+  mutate(p = n / sum(n))
+
+## make a highlight 
+subset_data <- subset_data %>%
+  mutate(
+    highlight_status = case_when(
+      HGB_trend == "↑ Rising" & (HGB > 120) ~ "Rising & outside range",
+      HGB_trend == "↑ Rising"                           ~ "Rising & within range",
+      HGB_trend == "↓ Falling" & (HGB < 80) ~ "Falling & outside range",
+      HGB_trend == "↓ Falling"                          ~ "Falling & within range",
+      HGB_trend == "→ Stable"                           ~ "Stable",
+      TRUE                                              ~ "Other"
+    )
+  )
+
+
+
+# Dynamic subtitle with n and proportions
+subtitle_text <- paste0(
+  "Coloured by trend on most recent test ",
+  percent(trend_summary$p[trend_summary$HGB_trend == "↓ Falling"], accuracy = 1), " falling, ",
+  percent(trend_summary$p[trend_summary$HGB_trend == "↑ Rising"], accuracy = 1), " rising "
+)
+
+# Plot
+# Colour palette
+custom_colors <- c(
+  "Rising & outside range" = "#1ab31d",     # dark green
+  "Rising & within range"  = "#295225",     # light green
+  "Falling & outside range" = "#ff1515",    # dark red
+  "Falling & within range"  = "#5e2020",    # light coral
+  "Stable within range" = "grey60"
+)
+
+# Plot
+ggplot(subset_data, aes(x = CollectedDate, y = HGB, group = `Ur Number`)) +
+
+  # Target band
+  geom_rect(
+    aes(
+      xmin = min(CollectedDate, na.rm = TRUE),
+      xmax = max(CollectedDate, na.rm = TRUE),
+      ymin = 80, ymax = 120
+    ),
+    fill = "grey90", alpha = 0.2, inherit.aes = FALSE
+  ) +
+
+  # Dashed threshold lines
+  geom_hline(yintercept = c(80, 120), linetype = "dashed", color = "grey60") +
+
+  # Lines for all trends (stable lines in grey)
+  geom_line(aes(color = highlight_status), linewidth = 0.7, alpha = 0.6) +
+  geom_point(aes(color = highlight_status), size = 1.6, alpha = 0.9,
+             position = position_jitter(width = 3, height = 0)) +
+
+  scale_color_manual(values = custom_colors) +
+
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y", expand = c(0.01, 0.01)) +
+
+  labs(
+    title = "Haemoglobin Trends (Northlakes, Last 6 Months)",
+    subtitle = subtitle_text,
+    x = "Date",
+    y = "HGB (g/L)",
+    color = "Trend + Range"
+  ) +
+
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+
+# Summarize each patient by most recent result
+subset_table <- subset_data %>%
+  group_by(`Ur Number`) %>%
+  filter(CollectedDate == max(CollectedDate, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(`Ur Number`, CollectedDate, HGB, HGB_trend, highlight_status) %>%
+  arrange(desc(CollectedDate)) %>%
+  mutate(CollectedDate = format(CollectedDate, "%d-%b-%Y"))
+
+# Display as nice PDF/HTML table
+kbl(
+  subset_table,
+  caption = "Summary of Most Recent Haemoglobin Results for Subset Patients",
+  col.names = c("Patient UR", "Date", "HGB (g/L)", "Trend", "Trend + Range"),
+  booktabs = TRUE,
+  align = "lcccl"
+) %>%
+  kable_styling(latex_options = c("striped", "hold_position"))
+
+library(glue)
+
+# Extract percentages
+falling_pct <- percent(trend_summary$p[trend_summary$HGB_trend == "↓ Falling"], accuracy = 1)
+rising_pct  <- percent(trend_summary$p[trend_summary$HGB_trend == "↑ Rising"], accuracy = 1)
+stable_pct  <- percent(trend_summary$p[trend_summary$HGB_trend == "→ Stable"], accuracy = 1)
+
+# Compose interpretation
+
+interpretation_text <- glue(
+  "This plot displays haemoglobin (HGB) levels over time for individual patients, each represented by a connected line. ",
+  "Colours reflect the direction of change based on their most recent result:\n",
+  "- Red indicates a downward trend (↓ Falling)\n",
+  "- Green indicates an upward trend (↑ Rising)\n\n",
+  "The dashed grey lines represent target HGB thresholds (80–120 g/L). The background band highlights the target range. ",
+  "Most patients remain within or near target, but as of the most recent test: {falling_pct} show a falling trend, ",
+  "{rising_pct} show a rising trend, and {stable_pct} are stable.\n\n")
+
+
+## for shiny later, this would be the approach cat(interpretation_text)
+
+latest_trends <- subset_data %>%
+  group_by(`Ur Number`) %>%
+  filter(CollectedDate == max(CollectedDate, na.rm = TRUE)) %>%
+  ungroup()
+
+# Compute percentages for falling, rising, stable
+trend_counts <- latest_trends %>%
+  mutate(trend_category = case_when(
+    grepl("Falling", highlight_status) ~ "Falling",
+    grepl("Rising", highlight_status) ~ "Rising",
+    grepl("Stable", highlight_status) ~ "Stable",
+    TRUE ~ "Other"
+  )) %>%
+  count(trend_category) %>%
+  mutate(p = n / sum(n)) %>%
+  complete(trend_category = c("Falling", "Rising", "Stable"), fill = list(n = 0, p = 0))
+
+# Extract percentages
+falling_pct_subgroup <- percent(trend_counts$p[trend_counts$trend_category == "Falling"], accuracy = 1)
+rising_pct_subgroup  <- percent(trend_counts$p[trend_counts$trend_category == "Rising"], accuracy = 1)
+stable_pct_subgroup  <- percent(trend_counts$p[trend_counts$trend_category == "Stable"], accuracy = 1)
+
+interpretation_text_subgroup <- glue(
+  "This figure shows longitudinal haemoglobin (HGB) results for 50 patients at the Northlakes unit over the past six months. ",
+  "Each line represents an individual patient trajectory, coloured by both the direction of trend and whether the most recent result was within the target range.\n\n",
+  "- Green: Rising HGB\n",
+  "- Red: Falling HGB\n",
+  "- Grey: Stable HGB\n",
+  "- Brighter colours indicate a most recent value outside the 80–120 g/L target range; muted colours indicate values within range.\n\n",
+  "As of the most recent measurement:\n",
+  "- {falling_pct_subgroup} of patients were trending downward\n",
+  "- {rising_pct_subgroup} were trending upward\n",
+  "- {stable_pct_subgroup} were stable\n\n",
+  "The shaded region indicates the HGB target range (80–120 g/L). This visual supports identification of patients who may benefit from anaemia review or intervention."
+)
+
+
+```
+
+### Patient level Hb interpretation
+
+
+`r interpretation_text`
+
+`r interpretation_text_subgroup`
+
+## Haemoglobin Results tabulated
 
 ```{r hgb_analysis, echo=FALSE, warning=FALSE, message=FALSE}
 
@@ -356,118 +731,18 @@ returnExtremes <- function(dataset, thresholdDF) {
 
 ```
 
-# Summary
+# Target Summary
 
 
 ```{r extremes, warning = FALSE, echo = FALSE}
 returnExtremes(coreData, thresholds)
 ```
 
-# Haemaglobin
-
-```{r hgb, echo=FALSE, error=FALSE, message=FALSE, warning=FALSE}
-# Subset by pt 
-# 
-
-#as.Date(Collected)
-# as.Date nested in as.POSIXct to support time format in future if needed
-## as.Date(as.POSIXct(Collected, format="%d/%m/%Y %H:%M"))
-# 
-# HB data ranges 80-120
-# 
-
-# TODO: better axis labels / formats
-# TODO: rolling mean from Zoo library (rollmean for average over-time)
-# TODO: fix axis ticks 
-
-ggplot(coreData %>% filter( #keep dates within range of dateWindow dates
-  CollectedDate>dateWindow[1], 
-  CollectedDate <dateWindow[2]), 
-  aes(x = CollectedDate, y = HGB)) +
-  geom_point(alpha = 0.25, size = 1.5, color = "grey40") +
-  geom_smooth(method = "loess", span = 0.25, se = TRUE,
-              color = "firebrick", fill = "firebrick", alpha = 0.2) +
-  geom_line(data = weekly_summary %>% filter( #keep dates within range of dateWindow dates
-            WeekStart > dateWindow[1], 
-            WeekStart < dateWindow[2]), 
-            aes(x = WeekStart, y = median_HGB),
-            inherit.aes = FALSE, color = "steelblue", linewidth = 1.2) +
-  geom_point(data = weekly_summary %>% filter( #keep dates within range of dateWindow dates
-              WeekStart > dateWindow[1], 
-              WeekStart < dateWindow[2]),
-              aes(x = WeekStart, y = median_HGB),
-              inherit.aes = FALSE, color = "steelblue", size = 2) +
-  geom_hline(yintercept = c(80, 120), color = "red", linetype = "dashed") +
-  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y") +
-  labs(
-    title = "Haemoglobin Levels Over Time",
-    subtitle = "",
-    x = "Date", y = "Haemoglobin (g/L)"
-  ) +
-  scatterplotTheme
-
-#HbLow <- subset(coreData, HGB <= 80)
-#summary(HbLow) #target specific values. E.g. what is average phosphate with low Hb?
-#HbHigh <- subset(coreData, HGB >= 120)
-#summary(HbHigh)
-
-# ?flat roll-mean because random generated data?
-# 
-# 
-
-cat("\n\n\n")
-#
-#ggplot(data= ptSubset, 
-#       aes(x=as.Date(Collected, format="%d/%m/%Y %H:%M"), y=HGB, group=1)) +
-#  geom_point() +
-#  geom_hline(yintercept = 80, color = "red") + 
-#  geom_hline(yintercept = 120, color = "red") +
-#  scale_x_date(date_breaks = "6 months", date_labels =  "%b %Y") +
-#  geom_smooth(method=stats::loess, se=F, 
-#                      method.args=list(degree=0,span=1)) +
-#  xlab("Sample Collection Date (Month Year)") +
-#  ggtitle(paste0("Haemoglobin Levels for patient: ", ptURN)) +
-#  scale_y_continuous(limits = c(30,180), breaks = seq(20,180,20)) +
-#  scatterplotTheme
-
-# Pt HB PLOT
-ptCollectedDates <- c(as.Date(min(ptSubset$Collected)), as.Date(max(ptSubset$Collected))) #GLOBAL VAR
-ggplot(coreData %>% filter( #keep dates within range of dateWindow dates
-  CollectedDate > ptCollectedDates[1], 
-  CollectedDate < ptCollectedDates[2]), 
-  aes(x = CollectedDate, y = HGB)) +
-  geom_point(alpha = 0.25, size = 1.5, color = "grey65") +
-  geom_smooth(method = "loess", span = 0.25, se = TRUE,
-              color = "firebrick", fill = "firebrick", alpha = 0.1) +
-  geom_line(data =ptSubset %>% filter( #keep dates within range of ptCollectedDates
-            CollectedDate >= ptCollectedDates[1], # can likely expand this to contain multiple pts w/ group_by feature
-            CollectedDate <= ptCollectedDates[2]),
-            aes(x = CollectedDate, y = HGB),
-            inherit.aes = FALSE, color = "darkslateblue", linewidth = 1.2) +
- # geom_point(data = weekly_summary %>% filter( #keep dates within range of dateWindow dates
- #             WeekStart > dateWindow[1], 
- #             WeekStart < dateWindow[2]),
- #             aes(x = WeekStart, y = median_HGB),
- #             inherit.aes = FALSE, color = "steelblue", size = 2) +
-  geom_hline(yintercept = c(80, 120), color = "red", linetype = "dashed") +
-  scale_x_date(date_breaks = "3 months", date_labels = "%b %Y") +
-  labs(
-    title = " Individual Pt Hb Saturations Over Time",
-    subtitle = "",
-    x = "Date", y = "Haemoglobin (g/L)"
-  ) +
-  scatterplotTheme
-# TODO: ADD table listing pt values below graph
-
-```
-
 # Transferrin Saturation
 
-```{r TRFSAT, echo = FALSE, error = FALSE, message=FALSE, warning=FALSE}
+```{r TRFSAT, echo=FALSE, error=FALSE, message=FALSE, warning=FALSE, eval=FALSE}
 # TRFSATS - overall Data
-ggplot(coreData %>% filter( #keep dates within range of dateWindow dates
-  CollectedDate>dateWindow[1], 
-  CollectedDate <dateWindow[2]), 
+ggplot(coreData %>% 
   aes(x = CollectedDate, y = TRFSAT)) +
   geom_point(alpha = 0.25, size = 1.5, color = "grey40") +
   geom_smooth(method = "loess", span = 0.25, se = TRUE,
@@ -485,9 +760,9 @@ ggplot(coreData %>% filter( #keep dates within range of dateWindow dates
   geom_hline(yintercept = thresholds$TRFSAT, color = "red", linetype = "dashed") +
   scale_x_date(date_breaks = "1 month", date_labels = "%b %Y") +
   labs(
-    title = "Haemoglobin Levels Over Time",
+    title = "Transferrin Saturation",
     subtitle = "",
-    x = "Date", y = "Haemoglobin (g/L)"
+    x = "Date", y = "T-SATS %"
   ) +
   scatterplotTheme
 
@@ -513,9 +788,9 @@ ggplot(coreData %>% filter( #keep dates within range of dateWindow dates
   geom_hline(yintercept = thresholds$TRFSAT, color = "red", linetype = "dashed") +
   scale_x_date(date_breaks = "3 months", date_labels = "%b %Y") +
   labs(
-    title = " Individual Pt Hb Saturations Over Time",
+    title = "Transferrin Saturation",
     subtitle = "",
-    x = "Date", y = "Transferrin Saturations (%)"
+    x = "Date", y = "T-SATS %"
   ) +
   scatterplotTheme
 # TODO: ADD table listing pt values below graph
@@ -526,7 +801,7 @@ ggplot(coreData %>% filter( #keep dates within range of dateWindow dates
 
 # Serum Potassium
 
-```{r K, echo = FALSE, error = FALSE, message=FALSE, warning=FALSE}
+```{r K, echo = FALSE, error = FALSE, message=FALSE, warning=FALSE, eval=FALSE}
 ggplot(coreData %>% filter( #keep dates within range of dateWindow dates
   CollectedDate>dateWindow[1], 
   CollectedDate <dateWindow[2]), 
@@ -547,7 +822,7 @@ ggplot(coreData %>% filter( #keep dates within range of dateWindow dates
   geom_hline(yintercept = thresholds$K, color = "red", linetype = "dashed") +
   scale_x_date(date_breaks = "1 month", date_labels = "%b %Y") +
   labs(
-    title = "K Levels Over Time",
+    title = "K+ Levels Over Time",
     subtitle = "",
     x = "Date", y = "K"
   ) +
@@ -583,7 +858,7 @@ ggplot(coreData %>% filter( #keep dates within range of dateWindow dates
 
 # Serum Parathyroid Hormone
 
-```{r PTHR, echo = FALSE, error = FALSE, message=FALSE, warning=FALSE}
+```{r PTHR, echo = FALSE, error = FALSE, message=FALSE, warning=FALSE,eval=FALSE}
 ggplot(coreData %>% filter( #keep dates within range of dateWindow dates
   CollectedDate>dateWindow[1], 
   CollectedDate <dateWindow[2]), 
@@ -604,7 +879,7 @@ ggplot(coreData %>% filter( #keep dates within range of dateWindow dates
   geom_hline(yintercept = thresholds$PTHR, color = "red", linetype = "dashed") +
   scale_x_date(date_breaks = "1 month", date_labels = "%b %Y") +
   labs(
-    title = "PTHR Levels Over Time",
+    title = "PTH Levels Over Time",
     subtitle = "",
     x = "Date", y = "PTH Levels"
   ) +
@@ -630,7 +905,7 @@ ggplot(coreData %>% filter( #keep dates within range of dateWindow dates
   geom_hline(yintercept = thresholds$PTHR, color = "red", linetype = "dashed") +
   scale_x_date(date_breaks = "3 months", date_labels = "%b %Y") +
   labs(
-    title = " Individual Pt PTHR Over Time",
+    title = " Individual Pt PTH Over Time",
     subtitle = "",
     x = "Date", y = "Parathyroid Hormone Levels"
   ) +
@@ -640,7 +915,7 @@ ggplot(coreData %>% filter( #keep dates within range of dateWindow dates
 
 # Serum Phosphate
 
-```{r PHOS, echo = FALSE, error = FALSE, message=FALSE, warning=FALSE}
+```{r PHOS, echo = FALSE, error = FALSE, message=FALSE, warning=FALSE,eval=FALSE}
 ggplot(coreData %>% filter( #keep dates within range of dateWindow dates
   CollectedDate>dateWindow[1], 
   CollectedDate <dateWindow[2]), 
@@ -697,7 +972,7 @@ ggplot(coreData %>% filter( #keep dates within range of dateWindow dates
 
 # Serum Calcium
 
-```{r CAL, echo = FALSE, error = FALSE, message=FALSE, warning=FALSE}
+```{r CAL, echo = FALSE, error = FALSE, message=FALSE, warning=FALSE,eval=FALSE}
 ggplot(coreData %>% filter( #keep dates within range of dateWindow dates
   CollectedDate>dateWindow[1], 
   CollectedDate <dateWindow[2]), 
@@ -754,7 +1029,7 @@ ggplot(coreData %>% filter( #keep dates within range of dateWindow dates
 
 # Serum Albumin
 
-```{r ALB, echo = FALSE, error = FALSE, message=FALSE, warning=FALSE}
+```{r ALB, echo = FALSE, error = FALSE, message=FALSE, warning=FALSE,eval=FALSE}
 ggplot(coreData %>% filter( #keep dates within range of dateWindow dates
   CollectedDate>dateWindow[1], 
   CollectedDate <dateWindow[2]), 
@@ -811,7 +1086,7 @@ ggplot(coreData %>% filter( #keep dates within range of dateWindow dates
 
 # Hepatitis B Serum Antibodies
 
-```{r HBSAB, echo = FALSE, error = FALSE, message=FALSE, warning=FALSE}
+```{r HBSAB, echo = FALSE, error = FALSE, message=FALSE, warning=FALSE,eval=FALSE}
 # TODO: Handle <10 and > 1000 values
 ggplot(data=na.omit(coreData), 
        aes(x=as.Date(Collected, format="%d/%m/%Y %H:%M"), y=HBSAB, group=1)) +
