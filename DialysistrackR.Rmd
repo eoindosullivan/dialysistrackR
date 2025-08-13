@@ -21,12 +21,19 @@ The content that follows represents the current state of shared analysis, with o
 ```{r dataload, include=FALSE, warning=FALSE, message=FALSE}
 ## Dependencies ---- 
 # TinyTeX (Latex renderer)
-library(readr)
+#library(readr)
 library(tidyverse)
-library(lubridate)
+#library(lubridate)
 library(knitr)
 library(kableExtra)
 library(tinytex)
+#library(dplyr)
+#library(tidyr)
+
+library(scales)  # for percent formatting
+
+library(glue)
+
 
 ### function update - for the smushed x axis
 
@@ -40,8 +47,7 @@ scatterplotTheme <- theme_minimal() +
   )
 
 
-### Global Vars
-ptURN <- "RB111111"
+
 
 ### Data cleaning ----
 
@@ -59,11 +65,49 @@ coreData <- coreData %>%
     CollectedDate = as.Date(Collected)     # Keep just the date part - we can use this bit for graphs later.
   )
 
+### DUMMY_DAT structure
+# pt URN              | Hb_col | K_col | ...
+# New URN for each pt | Hb_val | K_val | ...
 
 
-# Global vars
-ptURN <- "RB111111"
+### Global Vars
 
+## flag outputs
+coreData <- coreData %>%
+  mutate(
+    HGB_flag = case_when(
+      HGB < 80 ~ "Low",
+      HGB > 120 ~ "High",
+      !is.na(HGB) ~ "Target",
+      TRUE ~ NA_character_
+    ),
+    ALB_flag = case_when(
+      ALB < 35 ~ "Low",
+      ALB >= 35 & ALB <= 50 ~ "Target",
+      ALB > 50 ~ "High",
+      TRUE ~ NA_character_
+    ),
+    PHOS_flag = case_when(
+      PHOS < 1.1 ~ "Low",
+      PHOS > 1.8 ~ "High",
+      !is.na(PHOS) ~ "Target",
+      TRUE ~ NA_character_
+    ),
+    PTHR_flag = case_when(
+      PTHR < 15 ~ "Low",
+      PTHR > 90 ~ "High",
+      !is.na(PTHR) ~ "Target",
+      TRUE ~ NA_character_
+    ),
+    TRFSAT_flag = case_when(
+      TRFSAT < 20 ~ "Low",
+      TRFSAT > 50 ~ "High",
+      !is.na(TRFSAT) ~ "Target",
+      TRUE ~ NA_character_
+    )
+  )
+
+### DUMMY DATA GENERATION
 # Create synthetic patient IDs
 n_patients <- 500
 existing_urs <- paste0("RB", sprintf("%06d", sample(100000:999999, n_patients)))
@@ -78,23 +122,35 @@ lab_sds <- list(
 
 # Drift assignment for ~15% of patients
 n_drift <- round(0.15 * n_patients)
-drift_map <- rep("normal", n_patients)
-drift_map[sample(1:n_patients, n_drift / 2)] <- "low"
-drift_map[sample(setdiff(1:n_patients, which(drift_map == "low")), n_drift / 2)] <- "high"
-names(drift_map) <- existing_urs
+drift_map <- rep("normal", n_patients) #default all pts drift = normal
+drift_map[sample(1:n_patients, n_drift / 2)] <- "low" #random sample assign low drift (half of 15%)
+drift_map[sample(
+  setdiff(1:n_patients, which(drift_map == "low")  # take difference between whole set and subset of pts assigned low
+          ), n_drift / 2)] <- "high" # random sample assign high drift to pts of above subset
+names(drift_map) <- existing_urs 
+# drift map structure
+# vector of values, with URN name assignments
 
 # Synthetic longitudinal data generator
 generate_longitudinal <- function(ur_number, drift_type = "normal") {
-  drift <- switch(drift_type, "low" = -1, "high" = +1, "normal" = 0)
-
+  drift <- switch(drift_type, 
+                  "low" = -1, 
+                  "high" = +1, 
+                  "normal" = 0) 
+  #switch statement assigns drift group to specific value
+  
   # Set the start date so the final (12th) sample lands near today
   start_date <- Sys.Date() %m-% months(11)
+  # take each URN + drift val
+  # random sample generate a lab val for each of the below categories. 
+  # using already assigned lab-val mean + add drift
+  # repeat for each month
 
   tibble(
     `Ur Number` = ur_number,
     Collected = start_date + 
       months(0:11) + 
-      days(sample(-3:3, 12, replace = TRUE)) + 
+      days(sample(-15:15, 12, replace = TRUE)) + 
       hours(sample(6:16, 12, replace = TRUE)),
     HGB    = round(rnorm(12, lab_means$HGB + drift * 15, lab_sds$HGB), 1),
     TRFSAT = round(rnorm(12, lab_means$TRFSAT + drift * 10, lab_sds$TRFSAT), 1),
@@ -116,44 +172,12 @@ coreData <- bind_rows(lapply(existing_urs, function(ur) {
     CollectedDate = as.Date(Collected)
   )
 
-
-# Create synthetic data spaced 4 months apart - have a better way now
-#generate_longitudinal <- function(ur_number, start_date = as.Date("2023-01-01")) {
-#  tibble(
-#    `Ur Number` = ur_number,
-#    Collected = format(
-#      start_date + 
-#        months(seq(0, by = 4, length.out = 5)) + 
-#        days(sample(0:5, 5, replace = TRUE)) + 
-#        hours(sample(6:16, 5, replace = TRUE)),
-#      format = "%d/%m/%Y %H:%M"
-#    ),
-#    HGB    = sample(seq(range_hgb[1], range_hgb[2]), 5, replace = TRUE),
-#    TRFSAT = sample(seq(range_trf[1], range_trf[2]), 5, replace = TRUE),
-#    K      = sample(seq(range_k[1], range_k[2]), 5, replace = TRUE),
-#    PTHR   = sample(seq(range_pthr[1], range_pthr[2]), 5, replace = TRUE),
-#    PHOS   = sample(seq(range_phos[1], range_phos[2]), 5, replace = TRUE),
-#    CAL    = sample(seq(range_cal[1], range_cal[2]), 5, replace = TRUE),
-#    ALB    = sample(seq(range_alb[1], range_alb[2]), 5, replace = TRUE),
-#    HBSAB  = sample(hbsab_vals, 5, replace = TRUE)
-#  )
-#}
-
-
 ```
 
-## Haemoglobin
+```{r plot_generator, echo=FALSE, warning=FALSE, message=FALSE}
 
-
-```{r plot_function_trend_tables, echo=FALSE, warning=FALSE, message=FALSE}
-
-## this might be easier, generic functions, can expand
+## PLOT GENERATOR FUNCTION
 ## now a summary table
-library(dplyr)
-library(tidyr)
-library(knitr)
-library(kableExtra)
-
 
 plot_lab_trend <- function(df, lab_var, date_range, y_label = NULL, y_limits = NULL) {
   lab_var <- rlang::ensym(lab_var)
@@ -198,103 +222,9 @@ plot_lab_trend <- function(df, lab_var, date_range, y_label = NULL, y_limits = N
       axis.text.x = element_text(angle = 45, hjust = 1)
     )
 }
-
-
-
-
-## flag outputs
-coreData <- coreData %>%
-  mutate(
-    HGB_flag = case_when(
-      HGB < 80 ~ "Low",
-      HGB > 120 ~ "High",
-      !is.na(HGB) ~ "Target",
-      TRUE ~ NA_character_
-    ),
-    ALB_flag = case_when(
-      ALB < 35 ~ "Low",
-      ALB >= 35 & ALB <= 50 ~ "Target",
-      ALB > 50 ~ "High",
-      TRUE ~ NA_character_
-    ),
-    PHOS_flag = case_when(
-      PHOS < 1.1 ~ "Low",
-      PHOS > 1.8 ~ "High",
-      !is.na(PHOS) ~ "Target",
-      TRUE ~ NA_character_
-    ),
-    PTHR_flag = case_when(
-      PTHR < 15 ~ "Low",
-      PTHR > 90 ~ "High",
-      !is.na(PTHR) ~ "Target",
-      TRUE ~ NA_character_
-    ),
-    TRFSAT_flag = case_when(
-      TRFSAT < 20 ~ "Low",
-      TRFSAT > 50 ~ "High",
-      !is.na(TRFSAT) ~ "Target",
-      TRUE ~ NA_character_
-    )
-  )
-
-
-
-#Add flag + trend 
-coreData_with_trend <- coreData %>%
-  arrange(`Ur Number`, Collected) %>%
-  group_by(`Ur Number`) %>%
-  mutate(
-    previous_HGB = lag(HGB),
-    HGB_flag = case_when(
-      HGB < 80 ~ "Low",
-      HGB > 120 ~ "High",
-      TRUE ~ "Target"
-    ),
-    HGB_trend = case_when(
-      is.na(previous_HGB) | is.na(HGB) ~ NA_character_,
-      HGB - previous_HGB > 10 ~ "↑ Rising",
-      HGB - previous_HGB < -10 ~ "↓ Falling"
-    )
-  ) %>%
-  ungroup()
-
-# table
-coreData_with_trend %>%
-  group_by(`Ur Number`) %>%
-  filter(Collected == max(Collected, na.rm = TRUE)) %>%  # ← Get most recent row per patient
-  ungroup() %>%
-  filter(HGB_flag %in% c("High", "Low")) %>%
-  select(`Ur Number`, Collected, HGB, HGB_flag, HGB_trend) %>%
-  arrange(`Ur Number`, Collected) %>%
-  mutate(Collected = format(Collected, "%d-%b-%Y")) %>%
-  kbl(
-    caption = "Most Recent Haemoglobin Results Outside Target Range",
-    col.names = c("Patient UR", "Date", "HGB (g/L)", "Flag", "Trend"),
-    booktabs = TRUE,
-    align = "lcccl"
-  ) %>%
-  kable_styling(latex_options = c("striped", "hold_position"))%>%
-  add_footnote(
-    label = "Trend indicates a change of 10 units as compared to prior result, regardless of date. Only patients with High or Low results are shown.",
-    notation = "none"
-  )
-
-
-## thhis is much easier to work with I think going forwards
-# Calculate last 6 months range from today's date
-plot_lab_trend(
-  coreData,
-  HGB,
-  date_range = c(Sys.Date() %m-% months(6), Sys.Date()),
-  y_label = "HGB (g/L)",
-  y_limits = c(80, 120)
-)
-
-
-
-
 ```
 
+# Haemoglobin
 ## Interpretation
 
 This plot visualises haemoglobin (HGB) levels across the unit over time. Unit-level trends can help identify systemic issues affecting multiple patients — such as inconsistent access to erythropoiesis-stimulating agents (ESAs), delays in blood draws, or problems with iron management.
@@ -309,73 +239,68 @@ This plot visualises haemoglobin (HGB) levels across the unit over time. Unit-le
 
 -   Red dashed lines: The Kidney Health Service’s target haemoglobin range (80–120 g/L). Values falling persistently outside this band may indicate a need for clinical review at the unit or system level.
 
+##
 
-```{r Individual_patients, echo=FALSE, warning=FALSE, message=FALSE}
+```{r plot_function_trend_tables, echo=FALSE, warning=FALSE, message=FALSE}
 
-library(scales)  # for percent formatting
-
-# Summarise trend proportions (last sample per patient)
-trend_summary <- coreData_with_trend %>%
+#Add flag + trend 
+coreData_with_trend <- coreData %>%
+  arrange(`Ur Number`, Collected) %>%
   group_by(`Ur Number`) %>%
-  filter(CollectedDate == max(CollectedDate, na.rm = TRUE)) %>%
+  mutate(
+    previous_HGB = lag(HGB),
+    HGB_flag = case_when(
+      HGB < 100 ~ "Low",
+      HGB > 160 ~ "High",
+      TRUE ~ "Target"
+    ),
+    HGB_trend = case_when(
+      is.na(previous_HGB) | is.na(HGB) ~ NA_character_,
+      HGB - previous_HGB > 10 ~ "↑ Rising",
+      HGB - previous_HGB < -10 ~ "↓ Falling"
+    )
+  ) %>%
+  ungroup()
+
+# HGB outside threshold
+table_date_range <- c(as.Date("2024-08-01"), as.Date("2024-10-01")) # show results within specific data range
+coreData_with_trend[coreData_with_trend$CollectedDate>table_date_range[1] &
+                    coreData_with_trend$CollectedDate<table_date_range[2], ] %>%
+  group_by(`Ur Number`) %>%
+  filter(Collected == max(Collected, na.rm = TRUE)) %>%  # ← Get most recent row per patient
   ungroup() %>%
-  count(HGB_trend) %>%
-  mutate(p = n / sum(n))
-
-# Build the plot
-ggplot(coreData_with_trend, aes(x = CollectedDate, y = HGB, group = `Ur Number`)) +
-  
-  # Background points (stable, forgettem)
-  geom_line(data = coreData_with_trend %>% filter(HGB_trend == "→ Stable"),
-            aes(group = `Ur Number`), color = "grey80", alpha = 0.4, linewidth = 0.6) +
-  geom_point(data = coreData_with_trend %>% filter(HGB_trend == "→ Stable"),
-             color = "grey70", size = 1.2, alpha = 0.3,
-             position = position_jitter(width = 3, height = 0)) +
-  
-  # Foreground lines (rising/falling)
-  geom_line(data = coreData_with_trend %>% filter(HGB_trend %in% c("↑ Rising", "↓ Falling")),
-            aes(color = HGB_trend), linewidth = 0.8, alpha = 0.4) +
-  geom_point(data = coreData_with_trend %>% filter(HGB_trend %in% c("↑ Rising", "↓ Falling")),
-             aes(color = HGB_trend), size = 1.8,
-             position = position_jitter(width = 3, height = 0)) +
-
-  geom_hline(yintercept = c(80, 120), linetype = "dashed", color = "grey60") +
-
-  scale_color_manual(
-    values = c("↑ Rising" = "forestgreen", "↓ Falling" = "firebrick")
-  ) +
-
-  # Monthly x-axis
-  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y", expand = c(0.01, 0.01)) +
-
-  labs(
-    title = "Haemoglobin Trends by Patient",
-    subtitle = paste0("Last test trends: ",
-                      percent(trend_summary$p[trend_summary$HGB_trend == "↓ Falling"], accuracy = 1),
-                      " falling, ",
-                      percent(trend_summary$p[trend_summary$HGB_trend == "↑ Rising"], accuracy = 1),
-                      " rising"),
-    x = "Date",
-    y = "HGB (g/L)",
-    color = "Trend"
-  ) +
-
-  theme_minimal() +
-  theme(
-    legend.position = "bottom",
-    axis.text.x = element_text(angle = 45, hjust = 1)
+  filter(HGB_flag %in% c("High", "Low")) %>%
+  select(`Ur Number`, Collected, HGB, HGB_flag, HGB_trend) %>% # remove Hgb_flag from table once finished debugging?
+  arrange(HGB, `Ur Number`, Collected) %>% #prioritise by lowest Hb first
+  mutate(Collected = format(Collected, "%d-%b-%Y")) %>%
+  kbl(
+    caption = paste("Hb results out of range between:", table_date_range[1], "and", table_date_range[2]),
+    col.names = c("Patient UR", "Date", "HGB (g/L)", "Flag", "Trend"),
+    booktabs = TRUE,
+    align = "lcccl"
+  ) %>%
+  kable_styling(latex_options = c("striped", "hold_position"))%>%
+  add_footnote(
+    label = "Trend indicates a change of 10 units as compared to prior result, regardless of date. Only patients with High or Low results are shown.",
+    notation = "none"
   )
 
-## this might be useful on a per units analysis, hard to use with the massive glob of data
-library(scales)  # for percent formatting
+## this is much easier to work with I think going forwards
+# Calculate last 6 months range from today's date
+plot_lab_trend(
+  coreData,
+  HGB,
+  date_range = c(Sys.Date() %m-% months(6), Sys.Date()),
+  y_label = "HGB (g/L)",
+  y_limits = c(80, 120)
+)
 
 
+```
 
-### new idea - would be great for indivudal units
+```{r trend_sorting_and_highlighting, echo=FALSE, warning=FALSE, message=FALSE}
 
-
-
-
+# UNIT by UNIT analysis
 # Subset 50 patients and last 6 months of data
 set.seed(42)
 subset_ids <- sample(unique(coreData_with_trend$`Ur Number`), 50)
@@ -397,7 +322,7 @@ trend_summary <- coreData_with_trend %>%
   complete(HGB_trend = c("↓ Falling", "↑ Rising", "→ Stable"), fill = list(n = 0)) %>%
   mutate(p = n / sum(n))
 
-## make a highlight 
+## HIGHLIGHT STATUS for graphs
 subset_data <- subset_data %>%
   mutate(
     highlight_status = case_when(
@@ -410,16 +335,18 @@ subset_data <- subset_data %>%
     )
   )
 
+coreData_with_trend <- coreData_with_trend %>%
+  mutate(
+    highlight_status = case_when(
+      HGB_trend == "↑ Rising" & (HGB > 120) ~ "Rising & outside range",
+      HGB_trend == "↑ Rising"                           ~ "Rising & within range",
+      HGB_trend == "↓ Falling" & (HGB < 80) ~ "Falling & outside range",
+      HGB_trend == "↓ Falling"                          ~ "Falling & within range",
+      HGB_trend == "→ Stable"                           ~ "Stable",
+      TRUE                                              ~ "Other"
+    )
+  )
 
-
-# Dynamic subtitle with n and proportions
-subtitle_text <- paste0(
-  "Coloured by trend on most recent test ",
-  percent(trend_summary$p[trend_summary$HGB_trend == "↓ Falling"], accuracy = 1), " falling, ",
-  percent(trend_summary$p[trend_summary$HGB_trend == "↑ Rising"], accuracy = 1), " rising "
-)
-
-# Plot
 # Colour palette
 custom_colors <- c(
   "Rising & outside range" = "#1ab31d",     # dark green
@@ -428,10 +355,106 @@ custom_colors <- c(
   "Falling & within range"  = "#5e2020",    # light coral
   "Stable within range" = "grey60"
 )
+# Dynamic subtitle with n and proportions
+subtitle_text <- paste0(
+  "Coloured by trend on most recent test ",
+  percent(trend_summary$p[trend_summary$HGB_trend == "↓ Falling"], accuracy = 1), " falling, ",
+  percent(trend_summary$p[trend_summary$HGB_trend == "↑ Rising"], accuracy = 1), " rising "
+)
 
-# Plot
+
+# Summarize each patient by most recent result
+subset_table <- subset_data %>%
+  group_by(`Ur Number`) %>%
+  filter(CollectedDate == max(CollectedDate, na.rm = TRUE)) %>%
+  ungroup() %>%
+  select(`Ur Number`, CollectedDate, HGB, HGB_trend, highlight_status) %>%
+  arrange(desc(CollectedDate)) %>%
+  mutate(CollectedDate = format(CollectedDate, "%d-%b-%Y"))
+
+
+# Take only the most recent results for each pt for latest trends
+latest_trends <- subset_data %>%
+  group_by(`Ur Number`) %>%
+  filter(CollectedDate == max(CollectedDate, na.rm = TRUE)) %>%
+  ungroup()
+
+# Compute percentages for falling, rising, stable
+trend_counts <- latest_trends %>%
+  mutate(trend_category = case_when(
+    grepl("Falling", highlight_status) ~ "Falling",
+    grepl("Rising", highlight_status) ~ "Rising",
+    grepl("Stable", highlight_status) ~ "Stable",
+    TRUE ~ "Other"
+  )) %>%
+  count(trend_category) %>%
+  mutate(p = n / sum(n)) %>%
+  complete(trend_category = c("Falling", "Rising", "Stable"), fill = list(n = 0, p = 0))
+```
+
+
+```{r Individual_patients, echo=FALSE, warning=FALSE, message=FALSE}
+# ALL Pt data
+# TODO: Stable points = grey + reduced transparency
+ggplot(coreData_with_trend, aes(x = CollectedDate, y = HGB, group = `Ur Number`)) +
+  
+  # Background points (stable, forgettem)
+#  geom_line(data = coreData_with_trend %>% filter(HGB_trend == "→ Stable"),
+#            aes(group = `Ur Number`), color = "grey80", alpha = 0.4, linewidth = 0.6) +
+ # geom_point(data = coreData_with_trend %>% filter(HGB_trend == "→ Stable"),
+ #            color = "grey70", size = 1.2, alpha = 0.3,
+ #            position = position_jitter(width = 3, height = 0)) +
+  
+  # Foreground lines (rising/falling)
+  #geom_line(data = coreData_with_trend %>% filter(HGB_trend %in% c("↑ Rising", "↓ Falling")),
+  #          aes(color = HGB_trend), linewidth = 0.8, alpha = 0.4) +
+ # geom_line(data = coreData_with_trend, aes(color = append(embed(highlight_status,2)[,1],"Other")), linewidth = 0.7, alpha = 0.6) + #Added embed function - sets individual pt graphs to correct segment colouring
+  geom_point(data = coreData_with_trend %>% filter(HGB_trend %in% c("↑ Rising", "↓ Falling")),
+             aes(color = highlight_status), size = 0.2,
+             position = position_jitter(width = 3, height = 0)) +
+
+  geom_hline(yintercept = c(80, 120), linetype = "dashed", color = "grey60") +
+
+  scale_color_manual(
+    values = c("↑ Rising" = "forestgreen", "↓ Falling" = "firebrick")
+  ) +
+  scale_color_manual(values = custom_colors) +
+  # Monthly x-axis
+  scale_x_date(date_breaks = "1 month", date_labels = "%b %Y", expand = c(0.01, 0.01)) +
+
+  labs(
+    title = "Haemoglobin Trends by Patient",
+    subtitle = paste0("Last test trends: ",
+                      percent(trend_summary$p[trend_summary$HGB_trend == "↓ Falling"], accuracy = 1),
+                      " falling, ",
+                      percent(trend_summary$p[trend_summary$HGB_trend == "↑ Rising"], accuracy = 1),
+                      " rising"),
+    x = "Date",
+    y = "HGB (g/L)",
+    color = "Trend"
+  ) +
+
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+```
+
+``` {r plot_by_unit, echo=FALSE, warning=FALSE, message=FALSE}
+
+# Display as nice PDF/HTML table
+kbl(
+  subset_table,
+  caption = "Summary of Most Recent Haemoglobin Results for Subset Patients",
+  col.names = c("Patient UR", "Date", "HGB (g/L)", "Trend", "Trend + Range"),
+  booktabs = TRUE,
+  align = "lcccl"
+) %>%
+  kable_styling(latex_options = c("striped", "hold_position"))
+
+### PLOT: trends
 ggplot(subset_data, aes(x = CollectedDate, y = HGB, group = `Ur Number`)) +
-
   # Target band
   geom_rect(
     aes(
@@ -446,8 +469,8 @@ ggplot(subset_data, aes(x = CollectedDate, y = HGB, group = `Ur Number`)) +
   geom_hline(yintercept = c(80, 120), linetype = "dashed", color = "grey60") +
 
   # Lines for all trends (stable lines in grey)
-  geom_line(aes(color = highlight_status), linewidth = 0.7, alpha = 0.6) +
-  geom_point(aes(color = highlight_status), size = 1.6, alpha = 0.9,
+  geom_line(aes(color = append(embed(highlight_status,2)[,1],"Other")), linewidth = 0.7, alpha = 0.6) + #Added embed function - sets individual pt graphs to correct segment colouring
+  geom_point(aes(color = highlight_status), size = 1.6, alpha = 0.9, 
              position = position_jitter(width = 3, height = 0)) +
 
   scale_color_manual(values = custom_colors) +
@@ -465,31 +488,13 @@ ggplot(subset_data, aes(x = CollectedDate, y = HGB, group = `Ur Number`)) +
   theme_minimal() +
   theme(
     legend.position = "bottom",
-    axis.text.x = element_text(angle = 45, hjust = 1)
-  )
+    axis.text.x = element_text(angle = 45, hjust = 1))
 
+```
+### Patient level Hb interpretation
+``` {r plot_by_unit_interpretations,  echo=FALSE, warning=FALSE, message=FALSE}
 
-# Summarize each patient by most recent result
-subset_table <- subset_data %>%
-  group_by(`Ur Number`) %>%
-  filter(CollectedDate == max(CollectedDate, na.rm = TRUE)) %>%
-  ungroup() %>%
-  select(`Ur Number`, CollectedDate, HGB, HGB_trend, highlight_status) %>%
-  arrange(desc(CollectedDate)) %>%
-  mutate(CollectedDate = format(CollectedDate, "%d-%b-%Y"))
-
-# Display as nice PDF/HTML table
-kbl(
-  subset_table,
-  caption = "Summary of Most Recent Haemoglobin Results for Subset Patients",
-  col.names = c("Patient UR", "Date", "HGB (g/L)", "Trend", "Trend + Range"),
-  booktabs = TRUE,
-  align = "lcccl"
-) %>%
-  kable_styling(latex_options = c("striped", "hold_position"))
-
-library(glue)
-
+#SUPERGROUP Interpretation
 # Extract percentages
 falling_pct <- percent(trend_summary$p[trend_summary$HGB_trend == "↓ Falling"], accuracy = 1)
 rising_pct  <- percent(trend_summary$p[trend_summary$HGB_trend == "↑ Rising"], accuracy = 1)
@@ -506,26 +511,7 @@ interpretation_text <- glue(
   "Most patients remain within or near target, but as of the most recent test: {falling_pct} show a falling trend, ",
   "{rising_pct} show a rising trend, and {stable_pct} are stable.\n\n")
 
-
-## for shiny later, this would be the approach cat(interpretation_text)
-
-latest_trends <- subset_data %>%
-  group_by(`Ur Number`) %>%
-  filter(CollectedDate == max(CollectedDate, na.rm = TRUE)) %>%
-  ungroup()
-
-# Compute percentages for falling, rising, stable
-trend_counts <- latest_trends %>%
-  mutate(trend_category = case_when(
-    grepl("Falling", highlight_status) ~ "Falling",
-    grepl("Rising", highlight_status) ~ "Rising",
-    grepl("Stable", highlight_status) ~ "Stable",
-    TRUE ~ "Other"
-  )) %>%
-  count(trend_category) %>%
-  mutate(p = n / sum(n)) %>%
-  complete(trend_category = c("Falling", "Rising", "Stable"), fill = list(n = 0, p = 0))
-
+# SUBGROUP Interpretation
 # Extract percentages
 falling_pct_subgroup <- percent(trend_counts$p[trend_counts$trend_category == "Falling"], accuracy = 1)
 rising_pct_subgroup  <- percent(trend_counts$p[trend_counts$trend_category == "Rising"], accuracy = 1)
@@ -547,15 +533,10 @@ interpretation_text_subgroup <- glue(
 
 
 ```
-
-### Patient level Hb interpretation
-
-
 `r interpretation_text`
-
 `r interpretation_text_subgroup`
 
-## Haemoglobin Results tabulated
+### Haemoglobin Results tabulated
 
 ```{r hgb_analysis, echo=FALSE, warning=FALSE, message=FALSE}
 
@@ -601,6 +582,7 @@ hgb_stats %>%
 
 coreData <- coreData %>%
   mutate(CollectedDate = as.Date(Collected))
+
 # Define HGB flags: drop below target and acute drop
 coreData <- coreData %>%
   arrange(`Ur Number`, CollectedDate) %>%
@@ -609,7 +591,8 @@ coreData <- coreData %>%
     prev_HGB = lag(HGB),
     prev_date = lag(CollectedDate),
     delta_HGB = HGB - prev_HGB,
-    delta_days = as.numeric(CollectedDate - prev_date)
+    delta_days = as.numeric(CollectedDate - prev_date),
+    dHb_over_dDays = delta_HGB/delta_days #Hb drop per day, faster daily drops =? bigger priority
   ) %>%
   ungroup()
 
@@ -630,7 +613,7 @@ hb_flagged_events <- bind_rows(drop_below_target, drop_10_in_1_month) %>%
   slice_head(n = 1) %>%
   ungroup() %>%
   filter(CollectedDate >= Sys.Date() - 30) %>%   # was just getting too many hits with the synthetic stuff
-  select(`Ur Number`, CollectedDate, HGB, prev_HGB, delta_HGB, delta_days, Event)
+  select(`Ur Number`, CollectedDate, HGB, prev_HGB, delta_HGB, delta_days, Event, dHb_over_dDays)
 
 # Recalculate summary counts
 n_drop_below_target <- hb_flagged_events %>%
@@ -647,8 +630,8 @@ cat("Patients with ≥10 g/L HGB drop within 30 days: ", n_drop_10_in_1_month, "
 
 # Output final table
 hb_flagged_events %>%
-  arrange(`Ur Number`, CollectedDate) %>%
-  kable(caption = "Most Recent Flagged Haemoglobin Event per Patientm within 30 days", digits = 1) %>%
+  arrange(dHb_over_dDays, `Ur Number`, CollectedDate) %>%
+  kable(caption = "Most Recent Flagged Haemoglobin Event per Patient within 30 days", digits = 1) %>%
   kable_styling(full_width = FALSE)
 
 ```
@@ -661,7 +644,7 @@ knitr::opts_chunk$set(echo = TRUE, fig.width = 6, fig.height = 4)
 
 library(ggplot2)
 
-ptSubset<-coreData %>% filter(`Ur Number` == ptURN)
+#ptSubset<-coreData %>% filter(`Ur Number` == ptURN)
 # Allow for reports for 
 # - single pts
 # - list of single pts (e.g. show time-series for pts URN a, b, c, d ?all in one file vs ?separate files)
@@ -689,53 +672,6 @@ coreData$Collected <- as.POSIXct(coreData$Collected, format="%d/%m/%Y %H:%M")
 #  axis.title.x = element_text(vjust = -1)
 #  )
 
-```
-
-```{r globals, warning=FALSE, echo=FALSE}
-
-#summary(coreData)
-
-thresholds <- data.frame( 
-     hgb = c(80,115),
-  trfsat = c(20,50),
-       k = c(3.0,5.5),
-    pthr = c(18,90),
-    phos = c(1.5,4),
-      ca = c(2.00, 2.60),
-     alb = c(20,40)
-   #hbsab = c("<10", ">1000")
-); names(thresholds) <- names(coreData[seq(3, length(thresholds)+(3-1))])
-
-returnExtremes <- function(dataset, thresholdDF) {
-  
-  for (variable in names(thresholdDF)) {
-    low <- length(
-        subset(dataset, 
-               dataset[,variable] <= thresholdDF[[variable]][1]
-               )[,1] 
-            )
-        
-    high <- length(
-        subset(dataset, 
-               dataset[,variable] >= thresholdDF[[variable]][2]
-               )[,1] 
-            )
-    cat(paste0(variable, "\n",
-                 "no. of pts >= ", thresholdDF[[variable]][1],": ", low, "\n",
-                 "no. of pts <= ", thresholdDF[[variable]][2],": ", high, "\n"))
-      }
-      
-}
-
-# TODO: ?Vectorise returnExtremes function
-
-```
-
-# Target Summary
-
-
-```{r extremes, warning = FALSE, echo = FALSE}
-returnExtremes(coreData, thresholds)
 ```
 
 # Transferrin Saturation
